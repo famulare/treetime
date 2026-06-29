@@ -31,26 +31,56 @@ logger = logging.getLogger(__name__)
 def _parse_rate_file(rate_file):
     """Return (sites, rates) arrays from an IQ-TREE .rate file.
 
-    IQ-TREE .rate format (columns vary by version; first two always site, rate):
-        Site    Rate    Cat (optional)
-        1       0.123   1
+    IQ-TREE .rate formats (tab-separated; header detected from column names):
+
+    Format A — partitioned model (from -p):
+        Part  Site  Rate  Cat  C_Rate
+        1     1     0.83  2    0.84
         ...
-    Lines starting with 'Site' or '#' are skipped.
+    Format B — single-model (from -m):
+        Site  Rate  Cat
+        1     0.123 1
+        ...
+
+    Lines starting with '#' are comments and are skipped. The header line is
+    detected by looking for non-numeric first token (e.g. 'Part' or 'Site').
+    Rate column index is auto-detected from the header.
     """
     sites, rates = [], []
+    rate_col = None  # 0-based column index for the Rate value
+
     with open(rate_file) as fh:
         for line in fh:
             line = line.strip()
-            if not line or line.startswith('#') or line.lower().startswith('site'):
+            if not line or line.startswith('#'):
                 continue
-            parts = line.split()
-            if len(parts) < 2:
+            cols = line.split('\t') if '\t' in line else line.split()
+            if not cols:
                 continue
+            # Detect header row (first token is non-numeric)
             try:
-                sites.append(int(parts[0]))
-                rates.append(float(parts[1]))
+                float(cols[0])
             except ValueError:
+                # This is the header — find the 'Rate' column
+                lower = [c.lower() for c in cols]
+                if 'rate' in lower:
+                    rate_col = lower.index('rate')
+                    site_col = lower.index('site') if 'site' in lower else 1
+                else:
+                    rate_col = 1  # fallback
+                    site_col = 0
                 continue
+            # Data row
+            if rate_col is None:
+                # No header seen yet — assume format B (Site Rate ...)
+                rate_col = 1
+                site_col = 0
+            try:
+                sites.append(int(cols[site_col]))
+                rates.append(float(cols[rate_col]))
+            except (ValueError, IndexError):
+                continue
+
     return np.array(sites, dtype=int), np.array(rates, dtype=float)
 
 
