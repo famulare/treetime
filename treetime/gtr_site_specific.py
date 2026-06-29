@@ -370,8 +370,20 @@ class GTR_site_specific(GTR):
         else:
             return self._expQt(t)
 
-    def prop_t_compressed(self, seq_pair, multiplicity, t, return_log=False):
-        print('NOT IMPEMENTED')
+    def prob_t_compressed(self, seq_pair, multiplicity, t, return_log=False):
+        # Site-specific rates require per-site evaluation, so they are incompatible with
+        # pattern compression (TreeAnc raises a hard error for site-specific GTR + compress).
+        # The compressed/joint-mode branch-length likelihood is therefore undefined here.
+        # Use branch_length_mode='marginal' (GTR.prob_t_profiles already handles the
+        # site-specific case via its len(Qt.shape)==3 branch) with compression disabled.
+        #
+        # NB: this method was previously misspelled 'prop_t_compressed', so the base-class
+        # (non-site-specific) prob_t_compressed silently shadowed it -- making joint-mode
+        # dating with a site-specific GTR return wrong (scalar-rate) results with no error.
+        raise NotImplementedError(
+            "GTR_site_specific has no compressed (joint-mode) branch-length likelihood. "
+            "Use branch_length_mode='marginal' with sequence compression disabled."
+        )
 
     def propagate_profile(self, profile, t, return_log=False):
         """
