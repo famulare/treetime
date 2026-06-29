@@ -11,6 +11,55 @@ from .treetime import reduce_time_marginal_argument
 from .CLI_io import *
 
 
+def _build_site_specific_gtr_from_params(params, aln, base_tree_path):
+    """Two-stage GTR construction for Tier A site-rate-aware dating.
+
+    Stage 1: fit a scalar GTR from the alignment + tree (compress=True for speed)
+             to obtain Pi and W.
+    Stage 2: load IQ-TREE .rate file, build GTR_site_specific with the fitted Pi/W
+             and the normalized per-site rates as _mu.
+
+    Returns a GTR_site_specific instance, or raises on failure.
+    """
+    from .site_rate_loader import load_site_rates, build_site_specific_gtr
+
+    rate_file = params.site_rates
+    normalize = getattr(params, 'normalize_site_rates', True)
+    invariant_policy = getattr(params, 'site_rate_invariant_policy', 'include')
+
+    # Load and normalize the per-site rates
+    rates, meta = load_site_rates(
+        rate_file,
+        iqtree_file=None,  # .iqtree parsing is optional; log if not provided
+        invariant_policy=invariant_policy,
+        normalize=normalize,
+    )
+    print(
+        f"[site-rate] Loaded {meta['n_sites']} site rates from {rate_file}; "
+        f"raw mean={meta['raw_mean']:.4f}, normalized mean={meta['norm_mean']:.4f}, "
+        f"n_invariant={meta['n_invariant']}"
+    )
+
+    # Stage 1: fit scalar GTR to get Pi and W
+    print("[site-rate] Stage 1: fitting scalar GTR for Pi/W initialization...")
+    base_ta = TreeAnc(
+        tree=base_tree_path,
+        aln=aln,
+        gtr=GTR.standard('jc', alphabet='nuc'),
+        compress=True,   # fast; only need Pi/W
+        verbose=0,
+    )
+    base_ta.infer_ancestral_sequences(marginal=False)
+    base_ta.infer_gtr(marginal=False, normalized_rate=True)
+    base_gtr = base_ta.gtr
+    print(f"[site-rate] Stage 1 done: fitted Pi mean={base_gtr.Pi.mean():.4f}")
+
+    # Stage 2: build site-specific GTR
+    gtr_ss = build_site_specific_gtr(rates, base_gtr, seq_len=len(rates))
+    print(f"[site-rate] Stage 2 done: GTR_site_specific mu mean={gtr_ss.mu.mean():.4f}")
+    return gtr_ss
+
+
 def assure_tree(params, tmp_dir='treetime_tmp'):
     """
     Function that attempts to load a tree and build it from the alignment
@@ -381,7 +430,6 @@ def timetree(params):
 
     outdir = get_outdir(params, '_treetime')
 
-    gtr = create_gtr(params)
     aln, ref, fixed_pi = read_if_vcf(params)
 
     ###########################################################################
@@ -390,6 +438,35 @@ def timetree(params):
     if params.aln is None and params.sequence_length is None:
         print("one of arguments '--aln' and '--sequence-length' is required.", file=sys.stderr)
         return 1
+
+    # Site-rate-aware dating: two-stage GTR construction + forced marginal + no-compress
+    site_rates_given = getattr(params, 'site_rates', None)
+    if site_rates_given:
+        # Validate: joint mode is incompatible
+        blm = params.branch_length_mode
+        if blm not in ('auto', 'marginal'):
+            print(
+                f"ERROR: --site-rates requires --branch-length-mode marginal "
+                f"(got '{blm}'). Joint and input modes are incompatible with "
+                "site-specific GTR.",
+                file=sys.stderr,
+            )
+            return 1
+        # Force marginal mode and compression off
+        params.branch_length_mode = 'marginal'
+        if not getattr(params, 'no_compress', False):
+            print("[site-rate] Setting --no-compress (required with site-specific GTR)")
+        params.no_compress = True
+        # Two-stage GTR
+        try:
+            gtr = _build_site_specific_gtr_from_params(params, aln, params.tree)
+        except Exception as e:
+            print(f"ERROR building site-specific GTR: {e}", file=sys.stderr)
+            return 1
+    else:
+        gtr = create_gtr(params)
+
+    compress = not getattr(params, 'no_compress', False)
 
     myTree = TreeTime(
         dates=dates,
@@ -402,6 +479,7 @@ def timetree(params):
         fill_overhangs=not params.keep_overhangs,
         branch_length_mode=params.branch_length_mode,
         rng_seed=params.rng_seed,
+        compress=compress,
     )
 
     return run_timetree(myTree, params, outdir)

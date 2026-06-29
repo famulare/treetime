@@ -333,6 +333,40 @@ def add_timetree_args(parser):
         '--no-tip-labels', action='store_true', help="don't show tip labels (default for small trees with >=30 leaves)"
     )
 
+    # Site-rate-aware dating (Tier A/B) — empirical-Bayes per-site rate propagation
+    parser.add_argument(
+        '--site-rates',
+        type=str, default=None,
+        help="IQ-TREE .rate file (posterior-mean per-nt-site rates). Enables site-rate-aware "
+             "dating. Automatically sets --branch-length-mode marginal and --no-compress.",
+    )
+    parser.add_argument(
+        '--site-rate-mode',
+        choices=['mean', 'posterior-mixture'], default='mean',
+        help="Site-rate mode: 'mean' uses the posterior-mean rate per site (Tier A, default); "
+             "'posterior-mixture' uses per-site category posteriors from --site-rate-posteriors "
+             "(Tier B, requires --site-rate-posteriors and --site-rate-categories).",
+    )
+    parser.add_argument(
+        '--no-normalize-site-rates',
+        dest='normalize_site_rates', action='store_false',
+        help="Disable automatic normalization of loaded site rates to mean=1.",
+    )
+    parser.add_argument(
+        '--site-rate-invariant-policy',
+        choices=['include', 'exclude', 'epsilon'], default='include',
+        help="How to handle near-zero-rate (invariant) sites: 'include' keeps r≈0 (default), "
+             "'exclude' drops such sites, 'epsilon' replaces with 1e-6.",
+    )
+    parser.add_argument(
+        '--no-compress',
+        action='store_true', default=False,
+        help="Disable alignment-pattern compression. Required with --site-rates "
+             "(site-specific GTR + compression is incompatible). Set automatically when "
+             "--site-rates is given.",
+    )
+    parser.set_defaults(normalize_site_rates=True)
+
 
 def make_parser():
     parser = argparse.ArgumentParser(description='', usage=treetime_description)
