@@ -370,20 +370,84 @@ class GTR_site_specific(GTR):
         else:
             return self._expQt(t)
 
+    # optimal_t_compressed is intentionally NOT overridden.
+    # The base class handles both calling conventions:
+    # - profiles=True  (marginal mode, from optimal_marginal_branch_length):
+    #     calls self.prob_t_profiles — already handles site-specific GTR correctly.
+    # - profiles=False (joint mode, from optimal_branch_length):
+    #     calls self.prob_t_compressed — hits NotImplementedError below, which is
+    #     the correct outcome (joint mode is blocked for site-specific GTR).
+
     def prob_t_compressed(self, seq_pair, multiplicity, t, return_log=False):
-        # Site-specific rates require per-site evaluation, so they are incompatible with
-        # pattern compression (TreeAnc raises a hard error for site-specific GTR + compress).
-        # The compressed/joint-mode branch-length likelihood is therefore undefined here.
-        # Use branch_length_mode='marginal' (GTR.prob_t_profiles already handles the
-        # site-specific case via its len(Qt.shape)==3 branch) with compression disabled.
-        #
-        # NB: this method was previously misspelled 'prop_t_compressed', so the base-class
-        # (non-site-specific) prob_t_compressed silently shadowed it -- making joint-mode
-        # dating with a site-specific GTR return wrong (scalar-rate) results with no error.
+        """Blocked for site-specific GTR.
+
+        Pattern compression collapses alignment columns with identical parent/child states
+        into one entry, losing site identity. Site-specific rates require site-indexed data
+        (one rate per site). Applying per-site rates to pattern-compressed data would silently
+        produce wrong results (this was the bug in the original misspelled 'prop_t_compressed').
+
+        TreeAnc enforces compress=False for site-specific GTR at construction time
+        (raises TypeError). In marginal mode, BranchLenInterpolator calls prob_t_profiles
+        (which does handle site-specific rates correctly) instead of this method.
+
+        NB: previously misspelled 'prop_t_compressed'; the mismatch caused the base-class
+        scalar method to silently shadow it.
+        """
         raise NotImplementedError(
-            "GTR_site_specific has no compressed (joint-mode) branch-length likelihood. "
-            "Use branch_length_mode='marginal' with sequence compression disabled."
+            "GTR_site_specific.prob_t_compressed: pattern compression collapses site identity, "
+            "making per-site rates inapplicable. Use branch_length_mode='marginal' "
+            "with compress=False (which calls prob_t_profiles instead)."
         )
+
+    def prob_t_profiles_mixture(self, profile_pair, multiplicity, p_ik, r_k, t):
+        """Per-site posterior-mixture branch log-likelihood (Tier B).
+
+        Computes: log L_b(t) = sum_i multiplicity_i * log(sum_k p_ik * P_Q(pair_i; r_k*t))
+
+        IMPORTANT: self._mu must be ones(L) (use build_mixture_gtr, not build_site_specific_gtr).
+        Using _expQt (raw) not expQt (interpolator) avoids double-scaling:
+        _expQt(t*r_k) = exp(t * r_k * self.mu * eigenvals)
+        If self.mu = rates (Tier A), the effective rate becomes r_k * r_hat_i -- wrong.
+        With self.mu = ones(L), _expQt(t*r_k) = exp(t * r_k * Q) -- correct.
+
+        Parameters
+        ----------
+        profile_pair : (parent_profile, child_profile)
+            Each shape (L, n) where L = seq_len, n = alphabet size.
+        multiplicity : array (L,)
+            Per-site multiplicities (all ones when compress=False).
+        p_ik : array (L, K)
+            Per-site posterior probabilities for each FreeRate category k.
+        r_k : array (K,)
+            Category rate multipliers.
+        t : float
+            Branch length in subs/site (= mu * delta_t_years).
+
+        Returns
+        -------
+        float
+            Branch log-likelihood.
+        """
+        parent, child = profile_pair[0], profile_pair[1]
+
+        # Compute per-site per-category transition probabilities: shape (L, K)
+        # Use raw _expQt (not interpolator) to avoid double-scaling with self.mu.
+        per_site_per_cat = np.stack(
+            [
+                np.einsum('ai,ija,aj->a', child, self._expQt(float(t) * float(rk)), parent)
+                for rk in r_k
+            ],
+            axis=1,
+        )  # (L, K)
+
+        # Mixture: sum_k p_ik * P_k_i  (log-sum-exp per site)
+        mixture_per_site = np.einsum('lk,lk->l', p_ik, per_site_per_cat)  # (L,)
+
+        # Summed log-likelihood (weighted by multiplicity)
+        log_lh = np.sum(
+            multiplicity * np.log(mixture_per_site + ttconf.SUPERTINY_NUMBER)
+        )
+        return float(log_lh)
 
     def propagate_profile(self, profile, t, return_log=False):
         """
