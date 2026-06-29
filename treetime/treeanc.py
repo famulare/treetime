@@ -1430,7 +1430,10 @@ class TreeAnc(object):
             Which method should be used to reconstruct ancestral sequences.
             Supported values are "parsimony", "fitch", "probabilistic" and "ml"
         """
-        if branch_length_mode == 'marginal':
+        if branch_length_mode in ('marginal', 'marginal_mixture'):
+            # marginal_mixture is Tier B site-rate mode; uses the same marginal optimization
+            # path, but BranchLenInterpolator uses prob_t_profiles_mixture instead of
+            # prob_t_profiles for the branch-length distributions.
             self.optimize_tree_marginal(max_iter=max_iter, infer_gtr=infer_gtr, pc=pc, **kwargs)
             if prune_short:
                 self.prune_short_branches()
@@ -1444,7 +1447,8 @@ class TreeAnc(object):
             return ttconf.SUCCESS
         elif branch_length_mode != 'joint':
             raise UnknownMethodError(
-                "TreeAnc.optimize_tree: `branch_length_mode` should be in ['marginal', 'joint', 'input']"
+                "TreeAnc.optimize_tree: `branch_length_mode` should be in "
+                "['marginal', 'marginal_mixture', 'joint', 'input']"
             )
 
         self.logger('TreeAnc.optimize_tree: sequences...', 1)

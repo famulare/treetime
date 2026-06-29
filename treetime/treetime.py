@@ -209,7 +209,7 @@ class TreeTime(ClockTree):
 
         # determine how to reconstruct and sample sequences
         seq_kwargs = {
-            'marginal_sequences': sequence_marginal or (self.branch_length_mode == 'marginal'),
+            'marginal_sequences': sequence_marginal or (self.branch_length_mode in ('marginal', 'marginal_mixture')),
             'branch_length_mode': self.branch_length_mode,
             'sample_from_profile': 'root',
             'prune_short': kwargs.get('prune_short', True),
@@ -440,7 +440,7 @@ class TreeTime(ClockTree):
             if the maximal branch length in the tree is longer than 0.05, this will
             default to 'input'. Otherwise set to 'joint'
         """
-        if branch_length_mode in ['joint', 'marginal', 'input']:
+        if branch_length_mode in ['joint', 'marginal', 'input', 'marginal_mixture']:
             self.branch_length_mode = branch_length_mode
         elif self.aln:
             bl_dis = [n.branch_length for n in self.tree.find_clades() if n.up]

@@ -333,8 +333,10 @@ class ClockTree(TreeAnc):
         self.logger('ClockTree.init_date_constraints...', 2)
         self.tree.coalescent_joint_LH = 0
         if self.aln and (not self.sequence_reconstruction):
+            # marginal_mixture uses the same marginal ancestral inference as marginal mode
+            use_marginal_anc = self.branch_length_mode in ('marginal', 'marginal_mixture')
             self.infer_ancestral_sequences(
-                'probabilistic', marginal=self.branch_length_mode == 'marginal', sample_from_profile='root', **kwarks
+                'probabilistic', marginal=use_marginal_anc, sample_from_profile='root', **kwarks
             )
 
         # set the None  for the date-related attributes in the internal nodes.
@@ -352,8 +354,18 @@ class ClockTree(TreeAnc):
                 else:
                     gamma = 1.0
 
-                if self.branch_length_mode == 'marginal':
+                if self.branch_length_mode in ('marginal', 'marginal_mixture'):
                     node.profile_pair = self.marginal_branch_profile(node)
+                    # For Tier B: attach per-site category posteriors from the ClockTree
+                    if self.branch_length_mode == 'marginal_mixture':
+                        srd = getattr(self, '_site_rate_posteriors', None)
+                        if srd is None:
+                            raise ValueError(
+                                "branch_length_mode='marginal_mixture' requires "
+                                "ClockTree._site_rate_posteriors = {'p_ik': ..., 'r_k': ...} "
+                                "to be set before run()."
+                            )
+                        node.site_rate_posteriors = srd
                 elif self.branch_length_mode == 'joint' and (not hasattr(node, 'branch_state')):
                     self.add_branch_state(node)
 

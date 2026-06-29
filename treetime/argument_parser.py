@@ -359,6 +359,12 @@ def add_timetree_args(parser):
              "'exclude' drops such sites, 'epsilon' replaces with 1e-6.",
     )
     parser.add_argument(
+        '--site-rate-posteriors',
+        type=str, default=None,
+        help="IQ-TREE .siteprob file (per-site category posteriors). Required for "
+             "--site-rate-mode posterior-mixture (Tier B).",
+    )
+    parser.add_argument(
         '--no-compress',
         action='store_true', default=False,
         help="Disable alignment-pattern compression. Required with --site-rates "

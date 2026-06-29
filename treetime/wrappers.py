@@ -54,9 +54,15 @@ def _build_site_specific_gtr_from_params(params, aln, base_tree_path):
     base_gtr = base_ta.gtr
     print(f"[site-rate] Stage 1 done: fitted Pi mean={base_gtr.Pi.mean():.4f}")
 
-    # Stage 2: build site-specific GTR
-    gtr_ss = build_site_specific_gtr(rates, base_gtr, seq_len=len(rates))
-    print(f"[site-rate] Stage 2 done: GTR_site_specific mu mean={gtr_ss.mu.mean():.4f}")
+    # Stage 2: build GTR depending on mode
+    site_rate_mode = getattr(params, 'site_rate_mode', 'mean')
+    if site_rate_mode == 'posterior-mixture':
+        from .site_rate_loader import build_mixture_gtr, load_site_rate_posteriors
+        gtr_ss = build_mixture_gtr(base_gtr, seq_len=len(rates))
+        print(f"[site-rate] Stage 2 (Tier B): GTR_site_specific mixture (mu=ones)")
+    else:
+        gtr_ss = build_site_specific_gtr(rates, base_gtr, seq_len=len(rates))
+        print(f"[site-rate] Stage 2 (Tier A): GTR_site_specific mu mean={gtr_ss.mu.mean():.4f}")
     return gtr_ss
 
 
@@ -452,8 +458,18 @@ def timetree(params):
                 file=sys.stderr,
             )
             return 1
-        # Force marginal mode and compression off
-        params.branch_length_mode = 'marginal'
+        # Force marginal/mixture mode and compression off
+        site_rate_mode = getattr(params, 'site_rate_mode', 'mean')
+        if site_rate_mode == 'posterior-mixture':
+            params.branch_length_mode = 'marginal_mixture'
+            if not getattr(params, 'site_rate_posteriors', None):
+                print(
+                    "ERROR: --site-rate-mode posterior-mixture requires --site-rate-posteriors",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            params.branch_length_mode = 'marginal'
         if not getattr(params, 'no_compress', False):
             print("[site-rate] Setting --no-compress (required with site-specific GTR)")
         params.no_compress = True
@@ -481,6 +497,23 @@ def timetree(params):
         rng_seed=params.rng_seed,
         compress=compress,
     )
+
+    # For Tier B: load posteriors and attach to the tree before run()
+    if site_rates_given and getattr(params, 'site_rate_mode', 'mean') == 'posterior-mixture':
+        from .site_rate_loader import load_site_rate_posteriors
+        try:
+            p_ik, r_k, meta = load_site_rate_posteriors(
+                params.site_rate_posteriors,
+                params.site_rates.replace('.rate', '.iqtree'),  # look for .iqtree alongside
+            )
+            myTree._site_rate_posteriors = {'p_ik': p_ik, 'r_k': r_k}
+            print(
+                f"[site-rate Tier B] Loaded {meta['K']}-category posteriors; "
+                f"r_k={[f'{r:.3f}' for r in r_k]}"
+            )
+        except Exception as e:
+            print(f"ERROR loading site-rate posteriors: {e}", file=sys.stderr)
+            return 1
 
     return run_timetree(myTree, params, outdir)
 

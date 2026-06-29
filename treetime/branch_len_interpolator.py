@@ -123,6 +123,35 @@ class BranchLenInterpolator(Distribution):
                     for k in grid
                 ]
             )
+
+        elif branch_length_mode == 'marginal_mixture':
+            # Tier B: per-site posterior-mixture branch-length likelihood.
+            # Requires node.profile_pair (from marginal ancestral inference) and
+            # node.site_rate_posteriors = {'p_ik': (L, K), 'r_k': (K,)} set on
+            # ClockTree (via _site_rate_posteriors) before run().
+            if not hasattr(node, 'profile_pair'):
+                raise Exception(
+                    "marginal_mixture requires profile_pair — run marginal ancestral "
+                    "inference first (branch_length_mode='marginal_mixture' triggers "
+                    "marginal ancestral inference in init_date_constraints)"
+                )
+            if not hasattr(node, 'site_rate_posteriors'):
+                raise Exception(
+                    "marginal_mixture requires node.site_rate_posteriors = "
+                    "{'p_ik': (L, K), 'r_k': (K,)}. Set ClockTree._site_rate_posteriors "
+                    "before calling run()."
+                )
+            p_ik = node.site_rate_posteriors['p_ik']
+            r_k  = node.site_rate_posteriors['r_k']
+            log_prob = np.array(
+                [
+                    -self.gtr.prob_t_profiles_mixture(
+                        node.profile_pair, pattern_multiplicity, p_ik, r_k, k
+                    )
+                    for k in grid
+                ]
+            )
+
         else:
             raise Exception('unknown branch length mode! ' + branch_length_mode)
         # tmp_dis = Distribution(grid, log_prob, is_log=True, kind='linear')
