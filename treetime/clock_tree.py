@@ -362,7 +362,7 @@ class ClockTree(TreeAnc):
                         if srd is None:
                             raise ValueError(
                                 "branch_length_mode='marginal_mixture' requires "
-                                "ClockTree._site_rate_posteriors = {'p_ik': ..., 'r_k': ...} "
+                                "ClockTree._site_rate_posteriors = {'p_ik': ..., 'r_ik': ...} "
                                 "to be set before run()."
                             )
                         node.site_rate_posteriors = srd

@@ -424,13 +424,13 @@ class TestTierB:
         root_a = getattr(tt_a.tree.root, "numdate", None)
 
         gtr_b = build_mixture_gtr(base_gtr, len(rates))
-        gtr_b._site_rate_posteriors = {"p_ik": p_ik, "r_k": r_k}
+        gtr_b._site_rate_posteriors = {"p_ik": p_ik, "r_ik": r_k}
         tt_b = TreeTime(
             gtr=gtr_b, tree=str(fixture_data / "tiny.nwk"),
             aln=str(fixture_data / "tiny.fasta"), dates=tiny_dates,
             compress=False, branch_length_mode="marginal_mixture", verbose=0,
         )
-        tt_b._site_rate_posteriors = {"p_ik": p_ik, "r_k": r_k}
+        tt_b._site_rate_posteriors = {"p_ik": p_ik, "r_ik": r_k}
         tt_b.run(infer_gtr=False, max_iter=2, branch_length_mode='marginal_mixture')
         root_b = getattr(tt_b.tree.root, "numdate", None)
 

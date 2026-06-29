@@ -502,14 +502,19 @@ def timetree(params):
     if site_rates_given and getattr(params, 'site_rate_mode', 'mean') == 'posterior-mixture':
         from .site_rate_loader import load_site_rate_posteriors
         try:
-            p_ik, r_k, meta = load_site_rate_posteriors(
+            iqtree_file = params.site_rates.replace('.rate', '.iqtree')
+            p_ik, r_ik, meta = load_site_rate_posteriors(
                 params.site_rate_posteriors,
-                params.site_rates.replace('.rate', '.iqtree'),  # look for .iqtree alongside
+                iqtree_file,
+                best_model_nex=None,  # auto-detected alongside iqtree_file
             )
-            myTree._site_rate_posteriors = {'p_ik': p_ik, 'r_k': r_k}
+            myTree._site_rate_posteriors = {'p_ik': p_ik, 'r_ik': r_ik}
+            r_k_mean = meta['r_k_mean']
+            partitioned = meta.get('partitioned', False)
             print(
-                f"[site-rate Tier B] Loaded {meta['K']}-category posteriors; "
-                f"r_k={[f'{r:.3f}' for r in r_k]}"
+                f"[site-rate Tier B] Loaded {meta['K']}-category posteriors "
+                f"({'per-partition r_ik (L,K)' if partitioned else 'global r_k (K,)'}); "
+                f"mean r_k={[f'{r:.3f}' for r in r_k_mean]}"
             )
         except Exception as e:
             print(f"ERROR loading site-rate posteriors: {e}", file=sys.stderr)

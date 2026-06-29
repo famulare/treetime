@@ -399,7 +399,7 @@ class GTR_site_specific(GTR):
             "with compress=False (which calls prob_t_profiles instead)."
         )
 
-    def prob_t_profiles_mixture(self, profile_pair, multiplicity, p_ik, r_k, t,
+    def prob_t_profiles_mixture(self, profile_pair, multiplicity, p_ik, r_ik, t,
                                 ignore_gaps=True):
         """Per-site posterior-mixture branch log-likelihood (Tier B).
 
@@ -419,8 +419,10 @@ class GTR_site_specific(GTR):
             Per-site multiplicities (all ones when compress=False).
         p_ik : array (L, K)
             Per-site posterior probabilities for each FreeRate category k.
-        r_k : array (K,)
-            Category rate multipliers.
+        r_ik : array (K,) or (L, K)
+            Category rate multipliers. Shape (K,) = single global vector (all sites same);
+            shape (L, K) = per-site rates (partitioned models where each partition has its
+            own r_k; row i contains the category rates for site i's partition).
         t : float
             Branch length in subs/site (= mu * delta_t_years).
         ignore_gaps : bool
@@ -434,15 +436,29 @@ class GTR_site_specific(GTR):
         """
         parent, child = profile_pair[0], profile_pair[1]
 
+        # Normalise r_ik to a (L, K) array regardless of input shape
+        r_ik = np.asarray(r_ik, dtype=float)
+        if r_ik.ndim == 1:
+            # broadcast single global r_k to all sites
+            r_ik = np.tile(r_ik, (parent.shape[0], 1))  # (L, K)
+
+        K = r_ik.shape[1]
+
         # Compute per-site per-category transition probabilities: shape (L, K)
         # Use raw _expQt (not interpolator) to avoid double-scaling with self.mu.
-        per_site_per_cat = np.stack(
-            [
-                np.einsum('ai,ija,aj->a', child, self._expQt(float(t) * float(rk)), parent)
-                for rk in r_k
-            ],
-            axis=1,
-        )  # (L, K)
+        # For partitioned models, each site has its own r_k → we can't batch a single
+        # _expQt call over all sites. Group sites by unique rate vector for efficiency.
+        per_site_per_cat = np.zeros((parent.shape[0], K), dtype=float)
+
+        # Group sites by their r_k row to reuse _expQt where possible
+        unique_rk, inv = np.unique(r_ik, axis=0, return_inverse=True)
+        for ui, urk in enumerate(unique_rk):
+            mask = inv == ui
+            for ki, rk_val in enumerate(urk):
+                Qt_k = self._expQt(float(t) * float(rk_val))
+                per_site_per_cat[mask, ki] = np.einsum(
+                    'ai,ija,aj->a', child[mask], Qt_k[:, :, mask] if Qt_k.ndim==3 else Qt_k, parent[mask]
+                )
 
         # Mixture: sum_k p_ik * P_k_i  (per-site mixture)
         mixture_per_site = np.einsum('lk,lk->l', p_ik, per_site_per_cat)  # (L,)

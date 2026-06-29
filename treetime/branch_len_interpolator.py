@@ -142,11 +142,11 @@ class BranchLenInterpolator(Distribution):
                     "before calling run()."
                 )
             p_ik = node.site_rate_posteriors['p_ik']
-            r_k  = node.site_rate_posteriors['r_k']
+            r_ik = node.site_rate_posteriors['r_ik']  # (K,) or (L,K)
             log_prob = np.array(
                 [
                     -self.gtr.prob_t_profiles_mixture(
-                        node.profile_pair, pattern_multiplicity, p_ik, r_k, k
+                        node.profile_pair, pattern_multiplicity, p_ik, r_ik, k
                     )
                     for k in grid
                 ]

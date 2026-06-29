@@ -207,67 +207,141 @@ def load_site_rates(rate_file, iqtree_file=None, invariant_policy='include', nor
 # Public: load_site_rate_posteriors
 # ---------------------------------------------------------------------------
 
-def load_site_rate_posteriors(siteprob_file, iqtree_file):
-    """Parse IQ-TREE .siteprob + .iqtree → per-site category posteriors.
+def _parse_partition_rates_from_nex(nex_file, K):
+    """Parse per-partition FreeRate category rates from an IQ-TREE best_model.nex.
 
-    IQ-TREE .siteprob format (space-separated):
-        Site  p1  p2  ... pK
-        1     0.1 0.7 ... 0.2
-        ...
+    Returns dict {partition_id (int): np.array of shape (K,) with raw category rates}
+    or empty dict if parsing fails.
+    """
+    try:
+        nex = Path(nex_file).read_text()
+    except (OSError, TypeError):
+        return {}
+    pattern = re.compile(r'R\d+\{([^}]+)\}[^:]*:\s*pos(\d+)\{([^}]+)\}')
+    result = {}
+    for m in pattern.finditer(nex):
+        params_str, part_id = m.group(1), int(m.group(2))
+        vals = [float(x) for x in params_str.split(',')]
+        rates = np.array(vals[1::2], dtype=float)
+        if len(rates) == K:
+            result[part_id] = rates
+    return result
 
-    Category rates r_k are extracted from the .iqtree report.
+
+def load_site_rate_posteriors(siteprob_file, iqtree_file, best_model_nex=None):
+    """Parse IQ-TREE .siteprob + model info → per-site category posteriors.
+
+    Handles both unpartitioned and partitioned IQ-TREE outputs.
+
+    For **partitioned** models (detected when .siteprob has a 'Part' column), each
+    partition has its own category-rate parameters. This function builds a per-site
+    rate matrix `r_ik` of shape (L, K) using each site's partition-specific rates,
+    which is required for `prob_t_profiles_mixture`. Pass `best_model_nex` (the
+    IQ-TREE `*.best_model.nex` file) to enable this. Without it, falls back to a
+    global average r_k.
 
     Parameters
     ----------
     siteprob_file : str or Path
     iqtree_file : str or Path
+        IQ-TREE .iqtree report (for .iqtree category table; single-model runs).
+    best_model_nex : str or Path or None
+        IQ-TREE best_model.nex (for per-partition rates; partitioned runs).
+        If None, tries to auto-detect alongside iqtree_file.
 
     Returns
     -------
     p_ik : np.ndarray, shape (L, K)
         Posterior probability that site i belongs to category k.
-    r_k : np.ndarray, shape (K,)
-        Category rate multipliers (r_0 = 0 for invariant class if +I model).
+    r_ik : np.ndarray, shape (L, K) or (K,)
+        Per-site category rate multipliers. Shape (L, K) for partitioned models
+        (each site uses its partition's rates); shape (K,) for unpartitioned.
+        prob_t_profiles_mixture accepts both shapes.
     meta : dict
-        'K', 'has_invariant', 'r_k', 'w_k' (prior weights from .iqtree).
+        'K', 'partitioned', 'r_k_mean' (global mean category rates).
     """
     siteprob_file = Path(siteprob_file)
     iqtree_file = Path(iqtree_file)
 
-    # Parse .siteprob
+    # Auto-detect best_model.nex alongside iqtree_file
+    if best_model_nex is None:
+        candidate = Path(str(iqtree_file).replace('.iqtree', '.best_model.nex'))
+        if candidate.exists():
+            best_model_nex = candidate
+
+    # Parse .siteprob — handles both partitioned (Part Site p1..pK) and
+    # unpartitioned (Site p1..pK) formats. Detect from header.
     rows = []
+    partition_ids = []
+    prob_start_col = 1
+    has_part_col = False
+
     with open(siteprob_file) as fh:
         for line in fh:
             line = line.strip()
-            if not line or line.lower().startswith('site') or line.startswith('#'):
+            if not line or line.startswith('#'):
                 continue
-            parts = line.split()
+            parts = line.split('\t') if '\t' in line else line.split()
             try:
-                # First column is site index, rest are probabilities
-                probs = [float(x) for x in parts[1:]]
-                rows.append(probs)
+                float(parts[0])
             except ValueError:
+                lower = [c.lower() for c in parts]
+                if lower[0] == 'part' or (len(lower) > 1 and lower[1] == 'site'):
+                    prob_start_col = 2
+                    has_part_col = True
+                else:
+                    prob_start_col = 1
+                continue
+            try:
+                if has_part_col:
+                    partition_ids.append(int(parts[0]))
+                probs = [float(x) for x in parts[prob_start_col:]]
+                rows.append(probs)
+            except (ValueError, IndexError):
                 continue
 
     if not rows:
         raise ValueError(f"No category posteriors parsed from {siteprob_file}")
 
-    p_ik = np.array(rows, dtype=float)  # (L, K)
+    p_ik = np.array(rows, dtype=float)
     L, K = p_ik.shape
-
-    # Normalize rows (should sum to 1, but floating point)
     row_sums = p_ik.sum(axis=1, keepdims=True)
     p_ik = p_ik / np.where(row_sums > 0, row_sums, 1.0)
 
-    # Parse category rates from .iqtree
-    r_k, w_k = _extract_freerate_categories(iqtree_file, K)
-    has_invariant = (r_k[0] == 0.0) if len(r_k) > 0 else False
+    # Build per-site rate matrix
+    is_partitioned = has_part_col and len(partition_ids) == L
 
+    if is_partitioned and best_model_nex is not None:
+        part_rates = _parse_partition_rates_from_nex(best_model_nex, K)
+        if len(part_rates) >= 1:
+            # Build (L, K) matrix: each row = rates for that site's partition
+            r_ik = np.zeros((L, K), dtype=float)
+            for i, pid in enumerate(partition_ids):
+                if pid in part_rates:
+                    r_ik[i] = part_rates[pid]
+                else:
+                    # Fallback: mean across known partitions
+                    r_ik[i] = np.mean(list(part_rates.values()), axis=0)
+            # Normalize: each partition's rates are already ~mean-1 within partition;
+            # global mean should be near 1 after normalization
+            global_mean = r_ik.mean()
+            if global_mean > 0:
+                r_ik /= global_mean
+            logger.info(
+                f"Built per-site r_ik ({L}×{K}) from {len(part_rates)} partitions; "
+                f"global mean={float(r_ik.mean()):.4f}"
+            )
+            meta = {'K': K, 'partitioned': True, 'r_k_mean': r_ik.mean(axis=0).tolist()}
+            return p_ik, r_ik, meta
+        else:
+            logger.warning("Could not parse partition rates from best_model.nex; using global fallback")
+
+    # Fallback: single global r_k from .iqtree report
+    r_k, w_k = _extract_freerate_categories(iqtree_file, K)
     logger.info(
-        f"Loaded {L}×{K} site posteriors; "
-        f"r_k={np.round(r_k, 4).tolist()}; has_invariant={has_invariant}"
+        f"Loaded {L}×{K} site posteriors (unpartitioned); r_k={np.round(r_k,4).tolist()}"
     )
-    meta = {'K': K, 'has_invariant': has_invariant, 'r_k': r_k.tolist(), 'w_k': w_k.tolist()}
+    meta = {'K': K, 'partitioned': False, 'r_k_mean': r_k.tolist()}
     return p_ik, r_k, meta
 
 
