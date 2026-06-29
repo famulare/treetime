@@ -817,10 +817,14 @@ class TreeTime(ClockTree):
                     self.add_branch_state(new_node)
 
                 new_node.mutation_length = 0.0
-                if self.branch_length_mode == 'marginal':
+                if self.branch_length_mode in ('marginal', 'marginal_mixture'):
                     new_node.marginal_subtree_LH = clade.marginal_subtree_LH
                     new_node.marginal_outgroup_LH = clade.marginal_outgroup_LH
                     new_node.profile_pair = self.marginal_branch_profile(new_node)
+                    if self.branch_length_mode == 'marginal_mixture':
+                        srd = getattr(self, '_site_rate_posteriors', None)
+                        if srd is not None:
+                            new_node.site_rate_posteriors = srd
 
                 new_node.branch_length_interpolator = BranchLenInterpolator(
                     new_node,
@@ -989,10 +993,14 @@ class TreeTime(ClockTree):
                     if hasattr(parent, '_cseq'):
                         new_node._cseq = parent._cseq
                         self.add_branch_state(new_node)
-                    if self.branch_length_mode == 'marginal':
+                    if self.branch_length_mode in ('marginal', 'marginal_mixture'):
                         new_node.marginal_subtree_LH = parent.marginal_subtree_LH
                         new_node.marginal_outgroup_LH = parent.marginal_outgroup_LH
                         new_node.profile_pair = self.marginal_branch_profile(new_node)
+                        if self.branch_length_mode == 'marginal_mixture':
+                            srd = getattr(self, '_site_rate_posteriors', None)
+                            if srd is not None:
+                                new_node.site_rate_posteriors = srd
                     new_node.branch_length_interpolator = BranchLenInterpolator(
                         new_node,
                         self.gtr,

@@ -338,14 +338,16 @@ def add_timetree_args(parser):
         '--site-rates',
         type=str, default=None,
         help="IQ-TREE .rate file (posterior-mean per-nt-site rates). Enables site-rate-aware "
-             "dating. Automatically sets --branch-length-mode marginal and --no-compress.",
+             "dating. Automatically sets branch-length-mode to marginal (or marginal_mixture "
+             "for --site-rate-mode posterior-mixture) and disables alignment compression.",
     )
     parser.add_argument(
         '--site-rate-mode',
         choices=['mean', 'posterior-mixture'], default='mean',
         help="Site-rate mode: 'mean' uses the posterior-mean rate per site (Tier A, default); "
-             "'posterior-mixture' uses per-site category posteriors from --site-rate-posteriors "
-             "(Tier B, requires --site-rate-posteriors and --site-rate-categories).",
+             "'posterior-mixture' uses per-site category posteriors (Tier B, requires "
+             "--site-rate-posteriors; category rates are read from the .iqtree report "
+             "found alongside the .rate file).",
     )
     parser.add_argument(
         '--no-normalize-site-rates',

@@ -316,7 +316,6 @@ class TestTierA:
                 branch_length_mode="marginal",
             )
 
-    @pytest.mark.skip(reason="Phase 2: CLI --site-rates/--no-compress flags not yet wired")
     @pytest.mark.integration
     def test_A4_cli_smoke(self, fixture_data, tmp_path):
         """CLI with --site-rates must exit 0 and produce output. Skipped if CLI not installed."""

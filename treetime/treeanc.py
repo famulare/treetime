@@ -1431,9 +1431,13 @@ class TreeAnc(object):
             Supported values are "parsimony", "fitch", "probabilistic" and "ml"
         """
         if branch_length_mode in ('marginal', 'marginal_mixture'):
-            # marginal_mixture is Tier B site-rate mode; uses the same marginal optimization
-            # path, but BranchLenInterpolator uses prob_t_profiles_mixture instead of
-            # prob_t_profiles for the branch-length distributions.
+            # marginal_mixture (Tier B site-rate): uses the same marginal optimization path.
+            # NOTE: the branch-length *substitution* optimization inside optimize_tree_marginal
+            # (via optimal_t_compressed/prob_t_profiles) operates on the mixture GTR with
+            # _mu=ones(L) — i.e. flat-rate pre-conditioning, ignoring category mixture weights.
+            # The mixture likelihood (prob_t_profiles_mixture) is applied at the dating step in
+            # BranchLenInterpolator during make_time_tree. This is a known design limitation:
+            # pre-conditioning is sub-optimal for Tier B, but final dates are correct.
             self.optimize_tree_marginal(max_iter=max_iter, infer_gtr=infer_gtr, pc=pc, **kwargs)
             if prune_short:
                 self.prune_short_branches()
