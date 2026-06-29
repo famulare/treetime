@@ -458,6 +458,9 @@ def timetree(params):
                 file=sys.stderr,
             )
             return 1
+        # Prevent run_timetree from re-inferring the GTR (params.gtr defaults to 'infer',
+        # which would trigger infer_gtr=True and replace the site-specific GTR with scalar)
+        params.gtr = 'site-specific'  # any non-'infer' value works
         # Force marginal/mixture mode and compression off
         site_rate_mode = getattr(params, 'site_rate_mode', 'mean')
         if site_rate_mode == 'posterior-mixture':
