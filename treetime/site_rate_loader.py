@@ -82,8 +82,8 @@ def _extract_partition_weights_from_iqtree(iqtree_file, n_sites_total):
         if weights:
             break
 
-    # Sanity: weights should sum to ~1
-    if weights and abs(sum(weights.values()) - 1.0) > 0.1:
+    # Sanity: weights should sum to ~1 (tight tolerance to catch regex false positives)
+    if weights and abs(sum(weights.values()) - 1.0) > 0.03:
         weights = {}
 
     return weights
@@ -128,24 +128,23 @@ def load_site_rates(rate_file, iqtree_file=None, invariant_policy='include', nor
     raw_mean = float(rates.mean())
     logger.info(f"Loaded {L} site rates from {rate_file.name}; raw mean={raw_mean:.4f}")
 
-    # Detect per-partition normalization and correct
-    pp_corrected = False
+    # Detect per-partition normalization situation (diagnostic only).
+    # NOTE: in both the per-partition and the global cases the fix is identical —
+    # divide by raw_mean to produce a mean-1 vector. The partition weights are
+    # parsed for logging/provenance; they do NOT change the normalization arithmetic.
+    partition_structure_detected = False
     if iqtree_file is not None and abs(raw_mean - 1.0) > 0.05:
         pw = _extract_partition_weights_from_iqtree(iqtree_file, L)
         if pw:
-            # Reconstruct global mean from per-partition means
-            # IQ-TREE normalizes each partition to mean=1; global mean ≠ 1 only if
-            # site-rate distributions differ across partitions, which they do here.
-            # The rates vector already contains the right relative magnitudes;
-            # simply normalize globally.
             logger.info(
-                f"Per-partition weights detected {pw}; applying global renormalization."
+                f"Partition structure detected {pw}; raw mean {raw_mean:.4f} — "
+                "will normalize globally (divide by raw_mean)."
             )
-            pp_corrected = True
+            partition_structure_detected = True
         else:
             logger.warning(
-                f"Raw mean {raw_mean:.4f} != 1.0 but could not parse partition weights; "
-                "applying global normalization anyway."
+                f"Raw mean {raw_mean:.4f} != 1.0; applying global normalization "
+                "(could not parse partition weights from .iqtree)."
             )
 
     if normalize and raw_mean > 0:
@@ -169,7 +168,7 @@ def load_site_rates(rate_file, iqtree_file=None, invariant_policy='include', nor
         'norm_mean': norm_mean,
         'n_sites': L,
         'n_invariant': n_inv,
-        'per_partition_correction_applied': pp_corrected,
+        'partition_structure_detected': partition_structure_detected,
     }
     return rates, meta
 
@@ -270,13 +269,12 @@ def _extract_freerate_categories(iqtree_file, K):
         # Normalize weights
         w_k = w_k / w_k.sum()
     else:
-        logger.warning(
-            f"Could not parse {K} FreeRate categories from {iqtree_file}; "
-            "using fallback uniform rates 0..2."
+        # Do not fabricate rates — raise so the caller knows to supply a .iqtree file.
+        raise ValueError(
+            f"Could not parse {K} FreeRate categories from {iqtree_file}. "
+            "Provide the .iqtree report file alongside the .siteprob file, or "
+            "supply category rates and weights directly via categories_file."
         )
-        r_k = np.linspace(0, 2, K)
-        if K > 0:
-            r_k[0] = 0.0  # invariant class convention
 
     return r_k, w_k
 

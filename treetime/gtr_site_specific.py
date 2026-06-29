@@ -399,10 +399,11 @@ class GTR_site_specific(GTR):
             "with compress=False (which calls prob_t_profiles instead)."
         )
 
-    def prob_t_profiles_mixture(self, profile_pair, multiplicity, p_ik, r_k, t):
+    def prob_t_profiles_mixture(self, profile_pair, multiplicity, p_ik, r_k, t,
+                                ignore_gaps=True):
         """Per-site posterior-mixture branch log-likelihood (Tier B).
 
-        Computes: log L_b(t) = sum_i multiplicity_i * log(sum_k p_ik * P_Q(pair_i; r_k*t))
+        Computes: log L_b(t) = sum_i mult_i * non_gap_i * log(sum_k p_ik * P_Q(pair_i; r_k*t))
 
         IMPORTANT: self._mu must be ones(L) (use build_mixture_gtr, not build_site_specific_gtr).
         Using _expQt (raw) not expQt (interpolator) avoids double-scaling:
@@ -422,6 +423,9 @@ class GTR_site_specific(GTR):
             Category rate multipliers.
         t : float
             Branch length in subs/site (= mu * delta_t_years).
+        ignore_gaps : bool
+            If True (default), weight out gapped positions as in prob_t_profiles.
+            Must match the ignore_gaps setting used for the scalar likelihood.
 
         Returns
         -------
@@ -440,12 +444,19 @@ class GTR_site_specific(GTR):
             axis=1,
         )  # (L, K)
 
-        # Mixture: sum_k p_ik * P_k_i  (log-sum-exp per site)
+        # Mixture: sum_k p_ik * P_k_i  (per-site mixture)
         mixture_per_site = np.einsum('lk,lk->l', p_ik, per_site_per_cat)  # (L,)
 
-        # Summed log-likelihood (weighted by multiplicity)
+        # Apply gap weighting to match prob_t_profiles (gtr.py:954-959)
+        if ignore_gaps and self.gap_index is not None:
+            non_gap_frac = (
+                (1 - parent[:, self.gap_index]) * (1 - child[:, self.gap_index])
+            )
+        else:
+            non_gap_frac = 1.0
+
         log_lh = np.sum(
-            multiplicity * np.log(mixture_per_site + ttconf.SUPERTINY_NUMBER)
+            multiplicity * np.log(mixture_per_site + ttconf.SUPERTINY_NUMBER) * non_gap_frac
         )
         return float(log_lh)
 
