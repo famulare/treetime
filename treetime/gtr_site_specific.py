@@ -460,6 +460,15 @@ class GTR_site_specific(GTR):
                     'ai,ija,aj->a', child[mask], Qt_k[:, :, mask] if Qt_k.ndim==3 else Qt_k, parent[mask]
                 )
 
+        # _expQt is the RAW eigendecomposition reconstruction (unclamped). At large t*r_k
+        # (long branches x fast FreeRate categories) floating-point roundoff yields small
+        # NEGATIVE transition probabilities, so child.Qt.parent can go < 0. Floor at 0 —
+        # mirroring the np.maximum(0, .) in evolve()/propagate_profile — so the mixture stays
+        # >= 0 and the log() below never sees a negative (a NaN there poisons the marginal
+        # branch-length optimiser and makes dating diverge). This bites at K>=6, where the
+        # fastest category rates are large enough to trigger it on deep branches.
+        per_site_per_cat = np.maximum(per_site_per_cat, 0.0)
+
         # Mixture: sum_k p_ik * P_k_i  (per-site mixture)
         mixture_per_site = np.einsum('lk,lk->l', p_ik, per_site_per_cat)  # (L,)
 

@@ -375,6 +375,38 @@ class TestTierB:
         )
         assert np.isfinite(result), f"prob_t_profiles_mixture returned {result} (not finite)"
 
+    def test_B2b_negative_expQt_is_clamped(self, fixture_data, base_gtr):
+        """RAW _expQt develops small NEGATIVE transition probs from eigendecomposition
+        roundoff at large t*r_k (long branch x fast FreeRate category). The mixture
+        likelihood must floor them at 0 so log() stays finite; otherwise a NaN poisons
+        the marginal branch-length optimiser and dating diverges (the K=6 failure).
+        Deterministic: inject a negative entry into _expQt and require a finite result."""
+        from treetime.site_rate_loader import build_mixture_gtr
+
+        L, K = 20, 2
+        gtr_b = build_mixture_gtr(base_gtr, L)
+        n = len(base_gtr.alphabet)
+        # concentrated profiles: einsum picks out the single entry Qt[child_state, parent_state]
+        parent = np.zeros((L, n)); parent[:, 0] = 1.0
+        child = np.zeros((L, n)); child[:, 1] = 1.0
+        r_k = np.array([0.1, 5.0])
+        p_ik = np.full((L, K), 0.5)
+
+        orig = gtr_b._expQt
+        def neg_expQt(t):
+            M = np.array(orig(t), dtype=float)
+            if M.ndim == 3:
+                M[1, 0, :] = -0.5   # child=1, parent=0 → this entry is what einsum selects
+            else:
+                M[1, 0] = -0.5
+            return M
+        gtr_b._expQt = neg_expQt
+
+        result = gtr_b.prob_t_profiles_mixture(
+            (parent, child), np.ones(L), p_ik, r_k, t=2.0
+        )
+        assert np.isfinite(result), f"negative _expQt not clamped → non-finite ({result})"
+
     def test_B3_k1_edge_case(self, fixture_data, base_gtr):
         """K=1 Tier B must behave like vanilla marginal (all mass on one category)."""
         from treetime.site_rate_loader import build_mixture_gtr
