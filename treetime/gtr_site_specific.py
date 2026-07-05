@@ -370,8 +370,13 @@ class GTR_site_specific(GTR):
         else:
             return self._expQt(t)
 
-    def prop_t_compressed(self, seq_pair, multiplicity, t, return_log=False):
-        print('NOT IMPEMENTED')
+    def prob_t_compressed(self, seq_pair, multiplicity, t, return_log=False):
+        """Reject pattern-compressed likelihoods, which discard site identity."""
+        raise NotImplementedError(
+            'GTR_site_specific cannot evaluate pattern-compressed sequences because '
+            'site-specific rates require the original alignment coordinates. Use '
+            "branch_length_mode='marginal' with compress=False."
+        )
 
     def propagate_profile(self, profile, t, return_log=False):
         """
