@@ -132,7 +132,7 @@ partition model. For example:
 .. code-block:: bash
 
    iqtree2 -s alignment.fasta -te tree.nwk -p partitions.nex -m GTR+F+R4 \
-     --rate -wspr --prefix iqtree
+     --rate -wslr --prefix iqtree
 
    treetime --tree tree.nwk --dates dates.tsv --aln alignment.fasta \
      --site-rate-mode posterior-elbo \

@@ -942,6 +942,10 @@ def load_iqtree_site_rate_posteriors(
     # Its per-site responsibility is reconstructed as p_i0 = 1 - sum_k q_k. So the
     # number of .sitelh columns for such a partition is one fewer than its category
     # count (the variable rate classes only).
+    # IQ-TREE constrains FreeRate +R rates to be strictly positive, so a leading
+    # rate of exactly 0 reliably marks the +I invariant category; a spurious match
+    # would be caught by the variable_counts vs .sitelh header-column check below
+    # rather than silently corrupt output.
     invariant_partition = tuple(rates[0] == 0.0 for rates, _ in partition_models)
     variable_counts = tuple(
         count - 1 if invariant else count for count, invariant in zip(category_counts, invariant_partition)
@@ -1036,7 +1040,15 @@ def load_iqtree_site_rate_posteriors(
         ):
             difference = np.abs(raw_rate_means - posterior_raw_means)
             coordinate = int(np.argmax(difference))
-            raise ValueError(f'{rate_file}: posterior mean cross-check failed at alignment site {coordinate + 1}')
+            message = f'{rate_file}: posterior mean cross-check failed at alignment site {coordinate + 1}'
+            if any(invariant_partition):
+                message += (
+                    '. IQ-TREE reports .rate as a variable-conditional mean for +I+R '
+                    'and partitioned +I models, which does not match the '
+                    'full-posterior-mean cross-check; omit --site-rates (the optional '
+                    '.rate cross-check) for these models.'
+                )
+            raise ValueError(message)
 
     metadata = {
         'source': 'IQ-TREE .sitelh',
