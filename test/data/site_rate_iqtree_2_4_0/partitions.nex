@@ -1,0 +1,6 @@
+#nexus
+begin sets;
+  charset first = 1-35;
+  charset second = 36-50;
+  charpartition models = GTR+F+R2:first, GTR+F+R2:second;
+end;

@@ -54,6 +54,8 @@ from .clock_tree import ClockTree
 from .treetime import ttconf as treetime_conf
 from .gtr import GTR
 from .gtr_site_specific import GTR_site_specific
+from .site_rate_model import SiteRateModel, build_site_rate_gtrs, write_site_rate_audit
+from .iqtree_site_rates import load_iqtree_site_rate_posteriors, load_iqtree_site_rates
 from .merger_models import Coalescent
 from .treeregression import TreeRegression
 from .argument_parser import make_parser
