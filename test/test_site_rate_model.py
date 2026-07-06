@@ -1096,6 +1096,85 @@ def test_censored_rate_cross_check_fails_with_focused_message(tmp_path):
         )
 
 
+def _write_uniform_r2_cross_check_fixture(tmp_path, *, site_count, divergent_sites):
+    """Build an unpartitioned GTR+F+R2 fixture whose per-site posterior mean is 1.0.
+
+    Every site carries q = [0.5, 0.5] over categories [0.5, 1.5], so the
+    posterior mean rate is exactly 1.0 and the global normalization is 1.0. The
+    ``.rate`` rows in ``divergent_sites`` are perturbed well beyond the cross-check
+    tolerance so those sites diverge; every other ``.rate`` row matches exactly.
+    """
+    report = tmp_path / 'uniform_r2.iqtree'
+    report.write_text(
+        'IQ-TREE 2.4.0\n\nSEQUENCE ALIGNMENT\n------------------\n\n'
+        f'Input data: 4 sequences with {site_count} nucleotide sites\n\n'
+        'SUBSTITUTION PROCESS\n--------------------\n\n'
+        'Model of substitution: GTR+F+R2\n\n'
+        'Model of rate heterogeneity: FreeRate heterogeneity\n\n'
+        ' Category  Relative_rate  Proportion\n'
+        '  1         0.5            0.5\n'
+        '  2         1.5            0.5\n',
+        encoding='utf-8',
+    )
+    log_half = float(np.log(0.5))
+    sitelh_lines = ['Site\tLnL\tLnLW_1\tLnLW_2']
+    for site in range(1, site_count + 1):
+        sitelh_lines.append(f'{site}\t0.000000\t{log_half:.6f}\t{log_half:.6f}')
+    sitelh = tmp_path / 'uniform_r2.sitelh'
+    sitelh.write_text('\n'.join(sitelh_lines) + '\n', encoding='utf-8')
+    divergent = set(divergent_sites)
+    rate_lines = ['# IQ-TREE empirical Bayesian site rates', 'Site\tRate\tCat\tC_Rate']
+    for site in range(1, site_count + 1):
+        rate = 1.5 if site in divergent else 1.0
+        rate_lines.append(f'{site}\t{rate:.5f}\t1\t0.50000')
+    rate_file = tmp_path / 'uniform_r2.rate'
+    rate_file.write_text('\n'.join(rate_lines) + '\n', encoding='utf-8')
+    return sitelh, report, rate_file
+
+
+def test_rate_cross_check_warns_on_small_fraction_of_divergent_sites(tmp_path):
+    """A few sites where IQ-TREE's own .rate disagrees with .sitelh warn and load."""
+    sitelh, report, rate_file = _write_uniform_r2_cross_check_fixture(tmp_path, site_count=40, divergent_sites=(7,))
+    with pytest.warns(UserWarning, match=r"IQ-TREE's own \.sitelh/\.rate inconsistency"):
+        model = load_iqtree_site_rate_posteriors(
+            sitelh,
+            report_file=report,
+            rate_file=rate_file,
+            sequence_length=40,
+        )
+    assert model.metadata['rate_cross_check']['divergent_sites'] == 1
+    np.testing.assert_allclose(model.metadata['rate_cross_check']['maximum_divergence'], 0.5, atol=1e-6)
+
+
+def test_rate_cross_check_raises_on_large_fraction_of_divergent_sites(tmp_path):
+    """A widespread .rate/.sitelh mismatch (many sites) fails closed."""
+    sitelh, report, rate_file = _write_uniform_r2_cross_check_fixture(
+        tmp_path, site_count=40, divergent_sites=range(1, 11)
+    )
+    with pytest.raises(ValueError, match='cross-check failed at 10 of 40 sites'):
+        load_iqtree_site_rate_posteriors(
+            sitelh,
+            report_file=report,
+            rate_file=rate_file,
+            sequence_length=40,
+        )
+
+
+def test_wslr_rejects_overflow_inf_lnlw(tmp_path):
+    """An overflow literal (1e999 -> +inf) in an LnLW column is rejected, not zeroed."""
+    report = tmp_path / 'one_site.iqtree'
+    report.write_text(
+        (DATA / 'unpartitioned.iqtree')
+        .read_text(encoding='utf-8')
+        .replace('with 3 nucleotide sites', 'with 1 nucleotide sites'),
+        encoding='utf-8',
+    )
+    sitelh = tmp_path / 'overflow.sitelh'
+    sitelh.write_text('Site\tLnL\tLnLW_1\tLnLW_2\n1\t0.000000\t1e999\t-0.693147\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='not a finite decimal number or -inf'):
+        load_iqtree_site_rate_posteriors(sitelh, report_file=report, sequence_length=1)
+
+
 def test_sitelh_rows_renormalize_among_categories(tmp_path):
     report = tmp_path / 'one_site.iqtree'
     report.write_text(
