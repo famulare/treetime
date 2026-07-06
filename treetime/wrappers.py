@@ -11,6 +11,11 @@ from .treetime import reduce_time_marginal_argument
 from .CLI_io import *
 
 
+def _infer_gtr_from_params(params):
+    """Whether the CLI requested inference rather than a fixed/custom model."""
+    return params.gtr == 'infer' and not getattr(params, 'custom_gtr', None)
+
+
 def assure_tree(params, tmp_dir='treetime_tmp'):
     """
     Function that attempts to load a tree and build it from the alignment
@@ -47,7 +52,6 @@ def create_gtr(params):
             )
         if os.path.isfile(custom_gtr):
             gtr = GTR.from_file(custom_gtr)
-            params.gtr = 'custom'
             return gtr
         else:
             raise ValueError(f'File with custom GTR model `{custom_gtr}` does not exist!')
@@ -127,7 +131,9 @@ def scan_homoplasies(params):
     print('read tree from file %s with %d leaves' % (params.tree, N_tree))
     print('\ninferring ancestral sequences...')
 
-    ndiff = treeanc.infer_ancestral_sequences('ml', infer_gtr=params.gtr == 'infer', marginal=False, fixed_pi=fixed_pi)
+    ndiff = treeanc.infer_ancestral_sequences(
+        'ml', infer_gtr=_infer_gtr_from_params(params), marginal=False, fixed_pi=fixed_pi
+    )
     print('...done.')
 
     if is_vcf:
@@ -407,7 +413,15 @@ def timetree(params):
     return run_timetree(myTree, params, outdir)
 
 
-def run_timetree(myTree, params, outdir, tree_suffix='', prune_short=True, method_anc='probabilistic'):
+def run_timetree(
+    myTree,
+    params,
+    outdir,
+    tree_suffix='',
+    prune_short=True,
+    method_anc='probabilistic',
+    infer_gtr=None,
+):
     """
     this function abstracts the time tree estimation that is used for regular
     treetime inference and for arg time tree inference.
@@ -424,7 +438,8 @@ def run_timetree(myTree, params, outdir, tree_suffix='', prune_short=True, metho
         if branch_length_mode == 'auto':
             branch_length_mode = 'joint'
 
-    infer_gtr = params.gtr == 'infer'
+    if infer_gtr is None:
+        infer_gtr = _infer_gtr_from_params(params)
 
     myTree.tip_slack = params.tip_slack
     if not myTree.one_mutation:
@@ -490,6 +505,7 @@ def run_timetree(myTree, params, outdir, tree_suffix='', prune_short=True, metho
     try:
         success = myTree.run(
             root=root,
+            infer_gtr=infer_gtr,
             relaxed_clock=relaxed_clock_params,  # pylint: disable=possibly-used-before-assignment
             resolve_polytomies=(not params.keep_polytomies),
             stochastic_resolve=stochastic_resolve,
@@ -624,7 +640,7 @@ def ancestral_reconstruction(params):
     try:
         ndiff = treeanc.infer_ancestral_sequences(
             'ml',
-            infer_gtr=params.gtr == 'infer',
+            infer_gtr=_infer_gtr_from_params(params),
             marginal=params.marginal,
             fixed_pi=fixed_pi,
             reconstruct_tip_states=params.reconstruct_tip_states,
@@ -636,7 +652,7 @@ def ancestral_reconstruction(params):
     ###########################################################################
     ### OUTPUT and saving of results
     ###########################################################################
-    if params.gtr == 'infer':
+    if _infer_gtr_from_params(params):
         fname = outdir + 'sequence_evolution_model.txt'
         with open(fname, 'w', encoding='utf-8') as ofile:
             ofile.write(str(treeanc.gtr) + '\n')
