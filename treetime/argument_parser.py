@@ -334,6 +334,35 @@ def add_timetree_args(parser):
     )
 
 
+def add_site_rate_args(parser):
+    parser.add_argument(
+        '--site-rates',
+        metavar='RATE_FILE',
+        help='IQ-TREE .rate file containing posterior-mean relative site rates',
+    )
+    parser.add_argument(
+        '--site-rate-mode',
+        default=None,
+        choices=['mean', 'posterior-elbo'],
+        help='evaluate posterior-mean rates (default when site-rate input is present) or a frozen-responsibility ELBO',
+    )
+    parser.add_argument(
+        '--site-rate-posteriors',
+        metavar='SITEPROB_FILE',
+        help='IQ-TREE .siteprob file written by -wspr',
+    )
+    parser.add_argument(
+        '--site-rate-report',
+        metavar='IQTREE_FILE',
+        help='IQ-TREE .iqtree report containing FreeRate categories and partition speeds',
+    )
+    parser.add_argument(
+        '--site-rate-model',
+        metavar='BEST_MODEL_NEX',
+        help='IQ-TREE best-model NEXUS file containing partition coordinates and models',
+    )
+
+
 def make_parser():
     parser = argparse.ArgumentParser(description='', usage=treetime_description)
 
@@ -345,6 +374,7 @@ def make_parser():
     add_seq_len_aln_group(t_parser)
     add_time_arguments(t_parser)
     add_timetree_args(t_parser)
+    add_site_rate_args(t_parser)
     add_reroot_group(t_parser)
     add_gtr_arguments(t_parser)
     add_anc_arguments(t_parser)

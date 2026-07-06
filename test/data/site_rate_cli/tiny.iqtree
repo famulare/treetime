@@ -1,0 +1,10 @@
+IQ-TREE synthetic integration fixture
+
+Input data: 10 sequences with 50 nucleotide sites
+
+Model of substitution: GTR+F+R3
+
+Category  Relative_rate  Proportion
+1         0.13986013986  0.3
+2         0.559440559441 0.4
+3         2.44755244755  0.3
