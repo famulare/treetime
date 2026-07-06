@@ -440,6 +440,12 @@ class TreeTime(ClockTree):
             if the maximal branch length in the tree is longer than 0.05, this will
             default to 'input'. Otherwise set to 'joint'
         """
+        if self.site_rate_model is not None:
+            if branch_length_mode == 'auto':
+                branch_length_mode = 'marginal'
+            elif branch_length_mode != 'marginal':
+                raise UnknownMethodError('site-rate models require branch_length_mode="marginal"')
+
         if branch_length_mode in ['joint', 'marginal', 'input']:
             self.branch_length_mode = branch_length_mode
         elif self.aln:
@@ -830,6 +836,8 @@ class TreeTime(ClockTree):
                     one_mutation=self.one_mutation,
                     branch_length_mode=self.branch_length_mode,
                     n_grid_points=self.branch_grid_points,
+                    site_rate_model=self.site_rate_model,
+                    site_rate_base_gtr=self.site_rate_base_gtr,
                 )
 
                 clade.clades.remove(n1)
@@ -1001,6 +1009,8 @@ class TreeTime(ClockTree):
                         one_mutation=self.one_mutation,
                         branch_length_mode=self.branch_length_mode,
                         n_grid_points=self.branch_grid_points,
+                        site_rate_model=self.site_rate_model,
+                        site_rate_base_gtr=self.site_rate_base_gtr,
                     )
                     branches_alive = [b for b in branches_alive if b not in [n1, n2]] + [new_node]
 

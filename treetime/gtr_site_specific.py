@@ -362,7 +362,8 @@ class GTR_site_specific(GTR):
             stack of matrices for each site
         """
         eLambdaT = np.exp(t * self.mu * self.eigenvals)
-        return np.einsum('jia,ja,kja->ika', self.v, eLambdaT, self.v_inv)
+        transition = np.einsum('jia,ja,kja->ika', self.v, eLambdaT, self.v_inv)
+        return np.maximum(0, transition)
 
     def expQt(self, t):
         if t * self.rate_scale < 10 and self.approximate:

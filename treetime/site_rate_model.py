@@ -1,9 +1,11 @@
 """Validated site-rate data used by TreeTime date inference."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 
 import numpy as np
+
+from . import config as ttconf
 
 
 _NORMALIZATION_TOLERANCE = 1e-8
@@ -39,6 +41,7 @@ class SiteRateModel:
     category_prior_weights: np.ndarray = None
     category_mask: np.ndarray = None
     metadata: dict = None
+    _rate_groups: tuple = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
         mean_rates = _readonly_array(self.mean_rates, dtype=float, ndim=1, name='mean_rates')
@@ -105,6 +108,8 @@ class SiteRateModel:
                 raise ValueError('padded posterior weights must be zero')
             if np.any(category_prior_weights[~category_mask] != 0):
                 raise ValueError('padded category prior weights must be zero')
+            if np.any((posterior_weights > 0) & (category_prior_weights == 0)):
+                raise ValueError('positive posterior weight requires positive category prior weight')
             posterior_sums = posterior_weights.sum(axis=1)
             prior_sums = category_prior_weights.sum(axis=1)
             if not np.allclose(posterior_sums, 1.0, atol=_PROBABILITY_TOLERANCE, rtol=0):
@@ -132,8 +137,124 @@ class SiteRateModel:
         object.__setattr__(self, 'category_prior_weights', category_prior_weights)
         object.__setattr__(self, 'category_mask', category_mask)
         object.__setattr__(self, 'metadata', MappingProxyType(dict(self.metadata or {})))
+        if category_rates is None:
+            rate_groups = ()
+        else:
+            grouping_values = np.concatenate(
+                [category_rates, category_mask.astype(float)],
+                axis=1,
+            )
+            _, inverse = np.unique(grouping_values, axis=0, return_inverse=True)
+            groups = []
+            for group_index in range(int(inverse.max()) + 1):
+                sites = np.flatnonzero(inverse == group_index)
+                sites.setflags(write=False)
+                valid_categories = tuple(np.flatnonzero(category_mask[sites[0]]))
+                groups.append((sites, valid_categories))
+            rate_groups = tuple(groups)
+        object.__setattr__(self, '_rate_groups', rate_groups)
 
     @property
     def sequence_length(self):
         """Number of sites on the original alignment axis."""
         return len(self.mean_rates)
+
+    def prob_t_profiles_elbo(
+        self,
+        base_gtr,
+        profile_pair,
+        multiplicity,
+        t,
+        *,
+        return_log=False,
+        ignore_gaps=True,
+    ):
+        """Evaluate the frozen-responsibility branch ELBO.
+
+        This is the date-dependent term
+        ``sum_i sum_k p_ik log P(profile_pair_i | t * rate_ik)``. Category
+        responsibilities are fixed across branches; they are not remixed inside
+        a branch likelihood.
+        """
+        if self.evaluation_mode != 'posterior-elbo':
+            raise ValueError('prob_t_profiles_elbo requires posterior-elbo mode')
+        if getattr(base_gtr, 'is_site_specific', False):
+            raise ValueError('the ELBO evaluator requires a scalar base GTR')
+
+        parent = np.asarray(profile_pair[0], dtype=float)
+        child = np.asarray(profile_pair[1], dtype=float)
+        expected_shape = (self.sequence_length, len(base_gtr.alphabet))
+        if parent.shape != expected_shape or child.shape != expected_shape:
+            raise ValueError(f'profile arrays must have shape {expected_shape}, got {parent.shape} and {child.shape}')
+        if multiplicity is None:
+            multiplicity = np.ones(self.sequence_length, dtype=float)
+        else:
+            multiplicity = np.asarray(multiplicity, dtype=float)
+        if multiplicity.shape != (self.sequence_length,):
+            raise ValueError('multiplicity must have one entry per alignment site')
+        if not np.all(np.isfinite(multiplicity)) or np.any(multiplicity < 0):
+            raise ValueError('multiplicity must be finite and nonnegative')
+
+        if t < 0:
+            log_probability = -ttconf.BIG_NUMBER
+        else:
+            site_log_probability = np.zeros(self.sequence_length, dtype=float)
+            for sites, valid_categories in self._rate_groups:
+                representative = sites[0]
+                for category in valid_categories:
+                    weights = self.posterior_weights[sites, category]
+                    positive = weights > 0
+                    if not np.any(positive):
+                        continue
+                    transition = base_gtr.expQt(float(t) * float(self.category_rates[representative, category]))
+                    if transition.ndim != 2 or not np.all(np.isfinite(transition)) or np.any(transition < 0):
+                        raise ValueError('base GTR produced an invalid transition matrix')
+                    active_sites = sites[positive]
+                    probabilities = np.einsum(
+                        'ai,ij,aj->a',
+                        child[active_sites],
+                        transition,
+                        parent[active_sites],
+                    )
+                    if not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0):
+                        raise ValueError('profile transition probability is invalid')
+                    site_log_probability[active_sites] += weights[positive] * np.log(
+                        probabilities + ttconf.SUPERTINY_NUMBER
+                    )
+
+            if ignore_gaps and base_gtr.gap_index is not None:
+                gap_weight = (1 - parent[:, base_gtr.gap_index]) * (1 - child[:, base_gtr.gap_index])
+            else:
+                gap_weight = 1.0
+            log_probability = float(np.sum(multiplicity * gap_weight * site_log_probability))
+
+        return log_probability if return_log else np.exp(log_probability)
+
+
+def build_site_rate_gtrs(site_rate_model, base_gtr):
+    """Build the Tier A ancestral GTR and normalized scalar ELBO GTR."""
+    if getattr(base_gtr, 'is_site_specific', False):
+        raise ValueError('base_gtr must be a scalar GTR')
+
+    from .gtr import GTR
+    from .gtr_site_specific import GTR_site_specific
+
+    scalar_gtr = GTR.custom(
+        mu=1.0,
+        pi=base_gtr.Pi,
+        W=base_gtr.W,
+        alphabet=base_gtr.alphabet,
+        prof_map=base_gtr.profile_map,
+    )
+    site_gtr = GTR_site_specific(
+        seq_len=site_rate_model.sequence_length,
+        approximate=False,
+        alphabet=scalar_gtr.alphabet,
+        prof_map=scalar_gtr.profile_map,
+    )
+    site_gtr.assign_rates(
+        mu=site_rate_model.mean_rates,
+        pi=scalar_gtr.Pi,
+        W=scalar_gtr.W,
+    )
+    return site_gtr, scalar_gtr

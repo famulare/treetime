@@ -34,12 +34,11 @@ downstream dataset.
 - A fixed topology shared by the external rate analysis and TreeTime.
 - Tier A input from any IQ-TREE `.rate` model that emits one scalar rate per
   site.
-- Tier B input from IQ-TREE FreeRate models (`+R` and, once its output
-  convention is fixture-verified, `+I+R`).
+- Tier B input from IQ-TREE FreeRate (`+R`) models.
 - Edge-equal and edge-linked-proportional IQ-TREE partition models.
 - Interleaved or contiguous partition charsets.
 - Different numbers of rate categories in different partitions.
-- An invariant category with rate zero.
+- An explicitly represented category with rate zero in the canonical model.
 - A shared TreeTime substitution generator `Q` with site-specific scalar rate
   multipliers.
 - Marginal ancestral-state reconstruction with alignment compression disabled.
@@ -55,6 +54,9 @@ downstream dataset.
 - Partition-specific substitution matrices in the TreeTime likelihood.
 - IQ-TREE mixture-class outputs from `-wspm` or `-wspmr`; Tier B consumes
   rate-category posteriors from `-wspr`.
+- IQ-TREE `+I+R` input until the relationship between its invariant component
+  and `-wspr` columns is fixture-verified; the adapter fails rather than
+  guessing this mapping.
 - Codon-state substitution models.
 - Sparse VCF input in the first upstream PR.
 - Topology inference or topology changes attributable to site-rate data.
@@ -367,14 +369,18 @@ It cannot prove that the alignment characters are identical because IQ-TREE
 does not emit an alignment hash. Documentation MUST require the exact same
 alignment and column order for IQ-TREE and TreeTime.
 
-### 5.5 Invariant categories
+### 5.5 Zero-rate categories
 
 Rate zero is valid: `exp(Q * 0)` is the identity. Tier B MUST retain an
-invariant category rather than replacing it with `NaN`.
+explicitly represented zero-rate category rather than replacing it with
+`NaN`.
 
-The initial upstream PR will support invariant categories directly and will
-not expose `include|exclude|epsilon` policy flags. Site exclusion is a distinct
-analysis choice and should use an explicit site mask in a later feature.
+The canonical model and ELBO evaluator support zero-rate categories directly.
+The IQ-TREE adapter rejects `+I+R` until its `-wspr` category convention is
+verified; it does not infer an invariant responsibility from `.rate` category
+assignments. The initial upstream PR will not expose
+`include|exclude|epsilon` policy flags. Site exclusion is a distinct analysis
+choice and should use an explicit site mask in a later feature.
 
 ### 5.6 Validation policy
 
@@ -549,7 +555,7 @@ Checked-in fixtures MUST cover:
 - a partitioned file with contiguous charsets;
 - unequal partition sizes;
 - unequal category counts, padded correctly;
-- an invariant category;
+- an explicit zero-rate category in the canonical-model tests;
 - edge-equal and edge-linked-proportional speeds;
 - rejection of edge-unlinked partitions;
 - reordered input rows;
