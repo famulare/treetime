@@ -112,7 +112,7 @@ posterior-mean cross-check. IQ-TREE caps some reported ``.rate`` values at 100;
 if that censoring occurs, omit this optional cross-check.
 
 For a partitioned alignment, use IQ-TREE's edge-linked proportional (``-p``)
-or edge-linked equal (``-q``) partition model. For example:
+partition model. For example:
 
 .. code-block:: bash
 
@@ -131,6 +131,11 @@ speeds. TreeTime maps partition-local rows back to the original global
 alignment coordinate, applies partition speeds, and then performs one global
 mean-one normalization. Never reorder, trim, translate, or otherwise change
 the alignment between the IQ-TREE and TreeTime commands.
+
+TreeTime can validate existing edge-linked-equal (``-q``) output, whose
+reported partition speeds are one. IQ-TREE 2.4.0 itself aborts optimization of
+``-q`` FreeRate models, however, so ``-q`` is not a current end-to-end
+FreeRate workflow.
 
 .. list-table:: Required IQ-TREE files
    :header-rows: 1

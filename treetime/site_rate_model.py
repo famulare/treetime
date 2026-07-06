@@ -222,7 +222,7 @@ class SiteRateModel:
                     if not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0):
                         raise ValueError('profile transition probability is invalid')
                     site_log_probability[active_sites] += weights[positive] * np.log(
-                        probabilities + ttconf.SUPERTINY_NUMBER
+                        np.maximum(probabilities, ttconf.SUPERTINY_NUMBER)
                     )
 
             if ignore_gaps and base_gtr.gap_index is not None:

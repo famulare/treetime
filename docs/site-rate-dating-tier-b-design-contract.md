@@ -35,7 +35,9 @@ downstream dataset.
 - Tier A input from any IQ-TREE `.rate` model that emits one scalar rate per
   site.
 - Tier B input from IQ-TREE FreeRate (`+R`) models.
-- Edge-equal and edge-linked-proportional IQ-TREE partition models.
+- Edge-linked-proportional IQ-TREE partition models. The adapter also validates
+  existing edge-linked-equal output, but IQ-TREE 2.4.0 cannot optimize a
+  FreeRate model under `-q`, so that is not a current end-to-end workflow.
 - Interleaved or contiguous partition charsets.
 - Different numbers of rate categories in different partitions.
 - An explicitly represented category with rate zero in the canonical model.
@@ -578,6 +580,11 @@ Checked-in fixtures MUST cover:
 At least one fixture MUST be copied from or generated exactly like the local
 IQ-TREE output writers, including `Part` for `.rate`, `Set` for `.siteprob`,
 and partition-local site numbering.
+
+`test/data/site_rate_iqtree_2_4_0` is a self-contained IQ-TREE 2.4.0 writer
+fixture generated with `-p`, `--rate`, and `-wspr`. Its contiguous partitions
+have unequal sizes, and its raw within-partition `.rate` values have mean
+approximately one before the non-unit reported partition speeds are applied.
 
 The critical invariant test is:
 

@@ -1,6 +1,7 @@
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -22,6 +23,7 @@ from treetime.wrappers import create_gtr, run_timetree
 
 
 DATA = Path(__file__).parent / 'data' / 'site_rate_model'
+REAL_IQTREE_DATA = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0'
 
 
 def test_site_specific_gtr_rejects_compressed_likelihoods():
@@ -292,6 +294,77 @@ def test_partitioned_rates_map_local_sites_and_apply_speeds():
     assert model.metadata['normalization_constant'] == pytest.approx(expected_constant)
 
 
+def test_partition_mapping_invariant_uses_each_source_row_exactly_once(tmp_path):
+    source_rates = {
+        (1, 1): 0.4,
+        (1, 2): 0.9,
+        (1, 3): 1.4,
+        (2, 1): 2.2,
+        (2, 2): 1.3,
+        (2, 3): 0.6,
+    }
+    rate_file = tmp_path / 'distinct.rate'
+    rate_file.write_text(
+        'Part\tSite\tRate\n'
+        + ''.join(f'{partition}\t{site}\t{rate}\n' for (partition, site), rate in source_rates.items()),
+        encoding='utf-8',
+    )
+    model = load_iqtree_site_rates(
+        rate_file,
+        sequence_length=6,
+        partition_file=DATA / 'partitioned.best_model.nex',
+        report_file=DATA / 'partitioned.iqtree',
+    )
+    _, coordinates = parse_iqtree_partitions(DATA / 'partitioned.best_model.nex', sequence_length=6)
+    scaled_rates = np.empty(6)
+    for (partition, local_site), raw_rate in source_rates.items():
+        global_coordinate = coordinates[partition - 1][local_site - 1]
+        scaled_rates[global_coordinate] = raw_rate * model.partition_speeds[partition - 1]
+
+    assert len(np.unique(scaled_rates)) == 6
+    np.testing.assert_allclose(model.mean_rates, scaled_rates / scaled_rates.mean())
+
+
+def test_real_iqtree_partition_outputs_preserve_writer_units_and_coordinates():
+    tier_a = load_iqtree_site_rates(
+        REAL_IQTREE_DATA / 'generated.rate',
+        sequence_length=50,
+        partition_file=REAL_IQTREE_DATA / 'generated.best_model.nex',
+        report_file=REAL_IQTREE_DATA / 'generated.iqtree',
+    )
+    tier_b = load_iqtree_site_rate_posteriors(
+        REAL_IQTREE_DATA / 'generated.siteprob',
+        sequence_length=50,
+        partition_file=REAL_IQTREE_DATA / 'generated.best_model.nex',
+        report_file=REAL_IQTREE_DATA / 'generated.iqtree',
+        rate_file=REAL_IQTREE_DATA / 'generated.rate',
+    )
+    _, coordinates = parse_iqtree_partitions(REAL_IQTREE_DATA / 'generated.best_model.nex', sequence_length=50)
+    assert tuple(len(partition) for partition in coordinates) == (35, 15)
+    np.testing.assert_allclose(tier_a.partition_speeds, [0.1246, 3.0425])
+    np.testing.assert_allclose(tier_b.partition_speeds, [0.1246, 3.0425])
+
+    raw_rows = []
+    for line in (REAL_IQTREE_DATA / 'generated.rate').read_text(encoding='utf-8').splitlines():
+        fields = line.split()
+        if fields and fields[0].isdigit():
+            raw_rows.append((int(fields[0]), int(fields[1]), float(fields[2])))
+    assert len(raw_rows) == 50
+    raw_partition_means = [
+        np.mean([rate for partition, _, rate in raw_rows if partition == partition_id]) for partition_id in (1, 2)
+    ]
+    np.testing.assert_allclose(raw_partition_means, [1.0, 1.0], atol=1e-2)
+    assert not np.allclose(raw_partition_means, tier_a.partition_speeds, atol=1e-2)
+
+    scaled_rates = np.empty(50)
+    for partition, local_site, raw_rate in raw_rows:
+        global_coordinate = coordinates[partition - 1][local_site - 1]
+        scaled_rates[global_coordinate] = raw_rate * tier_a.partition_speeds[partition - 1]
+        assert tier_a.partition_index[global_coordinate] == partition - 1
+        assert tier_a.partition_site[global_coordinate] == local_site
+    np.testing.assert_allclose(tier_a.mean_rates, scaled_rates / scaled_rates.mean())
+
+
 def test_edge_equal_model_uses_reported_unit_speeds():
     model = load_iqtree_site_rates(
         DATA / 'partitioned.rate',
@@ -426,6 +499,35 @@ def test_elbo_reuses_transition_matrices_by_partition_rate_group(monkeypatch):
     expected_calls = sum(len(valid_categories) for _, valid_categories in model._rate_groups)
     assert len(calls) == expected_calls
     assert len(calls) < model.sequence_length * model.posterior_weights.shape[1]
+
+
+def test_elbo_is_invariant_to_partition_row_order_after_mapping():
+    model = load_iqtree_site_rate_posteriors(
+        DATA / 'partitioned.siteprob',
+        report_file=DATA / 'partitioned.iqtree',
+        partition_file=DATA / 'partitioned.best_model.nex',
+    )
+    permuted = replace(
+        model,
+        partition_index=1 - model.partition_index,
+        partition_names=model.partition_names[::-1],
+        partition_speeds=model.partition_speeds[::-1],
+    )
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    rng = np.random.default_rng(29)
+    profiles = (
+        rng.dirichlet(np.ones(len(base_gtr.alphabet)), size=model.sequence_length),
+        rng.dirichlet(np.ones(len(base_gtr.alphabet)), size=model.sequence_length),
+    )
+    observed = model.prob_t_profiles_elbo(base_gtr, profiles, np.ones(model.sequence_length), 0.1, return_log=True)
+    permuted_value = permuted.prob_t_profiles_elbo(
+        base_gtr,
+        profiles,
+        np.ones(model.sequence_length),
+        0.1,
+        return_log=True,
+    )
+    assert observed == pytest.approx(permuted_value, abs=1e-12)
 
 
 def test_rate_and_posterior_cross_check_rejects_category_mismatch(tmp_path):

@@ -204,20 +204,25 @@ def benchmark_end_to_end(seed=23):
 
 def main():
     print('scenario\ttier_a_s\ttier_b_s\tratio\tpeak_mb\tmodel_mb')
+    ratios = []
     for length, categories, partitions in ((1000, 4, 1), (1000, 6, 3)):
         for concentrated in (True, False):
             result = benchmark(length, categories, partitions, concentrated)
+            ratios.append(result.ratio)
             print(
                 f'{result.scenario}\t{result.tier_a_seconds:.4f}\t'
                 f'{result.tier_b_seconds:.4f}\t{result.ratio:.2f}\t'
                 f'{result.peak_megabytes:.2f}\t{result.model_megabytes:.2f}'
             )
     tier_a_seconds, tier_b_seconds, peak_megabytes = benchmark_end_to_end()
+    ratios.append(tier_b_seconds / tier_a_seconds)
     print(
         f'end-to-end:L=400,tips=32,K=4,P=2\t{tier_a_seconds:.4f}\t'
         f'{tier_b_seconds:.4f}\t{tier_b_seconds / tier_a_seconds:.2f}\t'
         f'{peak_megabytes:.2f}\t-'
     )
+    if max(ratios) >= 8:
+        raise SystemExit(f'Tier B benchmark exceeded the 8x acceptance boundary: {max(ratios):.2f}x')
 
 
 if __name__ == '__main__':
