@@ -104,14 +104,27 @@ The ``-wslr`` ``.sitelh`` file records the total site log-likelihood ``LnL``
 and, per rate category ``k``, ``LnLW_k = log(category-k site-likelihood times
 category-k weight)``. TreeTime reconstructs the per-site category
 responsibility as ``q_k = exp(LnLW_k - LnL)``. For a single-matrix
-substitution model these are unambiguous rate-category posteriors. TreeTime
+substitution model these are unambiguous rate-category posteriors. The
+supported rate-heterogeneity models are ``+R`` (FreeRate), ``+G`` (discrete
+Gamma), and ``+I`` combined with either (``+I+R`` or ``+I+G``). TreeTime
 rejects substitution-mixture models because mixture-class site-likelihoods
 could otherwise be mistaken for rate-category site-likelihoods when the column
 counts match.
 
+For ``+I`` models the invariant class is not a ``.sitelh`` column. TreeTime
+reconstructs its per-site responsibility from the variable-category deficit,
+``p_i0 = 1 - sum_k q_k``, and keeps it as an explicit rate-0 category
+``[p_i0, q_1, ..., q_K]`` with rates ``[0, r_1, ..., r_K]``. The invariant
+proportion ``p_inv`` comes from Category 0 of the report table (unpartitioned)
+or from ``+I{p_inv}`` in ``best_model.nex`` (partitioned).
+
 ``--site-rates iqtree.rate`` may be added to the second command as a strict
 posterior-mean cross-check. IQ-TREE caps some reported ``.rate`` values at 100;
-if that censoring occurs, omit this optional cross-check.
+if that censoring occurs, omit this optional cross-check. The cross-check is
+reliable only for unpartitioned ``+I+G``; IQ-TREE's ``.rate`` uses a
+variable-conditional convention for ``+I+R`` and for partitioned ``+I``, so omit
+``--site-rates`` for those (TreeTime otherwise fails loud rather than accepting a
+mismatched convention).
 
 For a partitioned alignment, use IQ-TREE's edge-linked proportional (``-p``)
 partition model. For example:
@@ -169,9 +182,11 @@ dated tree. TreeTime prints this warning when ``--confidence`` is requested.
 Both modes automatically disable alignment-pattern compression and use
 marginal ancestral-state branch likelihoods. ``--branch-length-mode auto``
 therefore becomes ``marginal``; explicit ``joint`` and ``input`` modes are
-rejected. VCF/variable-site input, ``--sequence-length`` augmentation, codon
-models, edge-unlinked partitions, and ``+I+R`` posterior output are not
-supported. A full nucleotide or amino-acid alignment is required.
+rejected. Only single-matrix rate-heterogeneity models are supported
+(``+R``, ``+G``, ``+I+R``, ``+I+G``). Substitution-mixture models,
+VCF/variable-site input, ``--sequence-length`` augmentation, codon models, and
+edge-unlinked partitions are not supported. A full nucleotide or amino-acid
+alignment is required.
 
 Posterior ELBO evaluation costs approximately one transition calculation per
 FreeRate category and is normally several times slower than posterior-mean

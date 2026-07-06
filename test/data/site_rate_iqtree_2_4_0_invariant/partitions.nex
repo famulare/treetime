@@ -1,0 +1,5 @@
+#nexus
+begin sets;
+  charset first = 1-360;
+  charset second = 361-600;
+end;
