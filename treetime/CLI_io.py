@@ -87,7 +87,9 @@ def read_if_vcf(params):
             ref = compress_seq['reference']
             aln = sequences
 
-            if not hasattr(params, 'gtr') or params.gtr == 'infer':  # if not specified, set it:
+            if not hasattr(params, 'gtr') or (
+                params.gtr == 'infer' and not getattr(params, 'custom_gtr', None)
+            ):  # if not specified, set it:
                 alpha = alphabets['aa'] if params.aa else alphabets['nuc']
                 fixed_pi = [ref.count(base) / len(ref) for base in alpha]
                 if fixed_pi[-1] == 0:
