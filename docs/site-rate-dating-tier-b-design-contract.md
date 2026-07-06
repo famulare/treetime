@@ -54,6 +54,9 @@ downstream dataset.
 - Partition-specific substitution matrices in the TreeTime likelihood.
 - IQ-TREE mixture-class outputs from `-wspm` or `-wspmr`; Tier B consumes
   rate-category posteriors from `-wspr`.
+- IQ-TREE substitution-mixture models. Standard IQ-TREE reports do not record
+  whether `.siteprob` was written by `-wspr`, `-wspm`, or `-wspmr`, so
+  mixture-class and rate-category columns cannot be distinguished reliably.
 - IQ-TREE `+I+R` input until the relationship between its invariant component
   and `-wspr` columns is fixture-verified; the adapter fails rather than
   guessing this mapping.
@@ -280,7 +283,8 @@ For unpartitioned Tier A:
 For unpartitioned Tier B:
 
 - `.siteprob`
-- `.iqtree` report containing category rates and weights
+- `.iqtree` report containing category rates and weights and confirming a
+  single-matrix substitution model
 - optional `.rate` for a posterior-mean cross-check
 
 For partitioned Tier A or Tier B:

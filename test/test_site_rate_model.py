@@ -344,6 +344,33 @@ def test_unpartitioned_report_must_identify_freerate_model(tmp_path):
         )
 
 
+def test_mixture_class_siteprob_is_rejected_even_when_width_matches_freerate():
+    with pytest.raises(ValueError, match=r'substitution-mixture.*ambiguous'):
+        load_iqtree_site_rate_posteriors(
+            DATA / 'unpartitioned.siteprob',
+            report_file=DATA / 'mixture_wspm.iqtree',
+        )
+
+
+def test_partition_mixture_model_is_rejected_even_when_width_matches_freerate(tmp_path):
+    model_file = tmp_path / 'mixture.best_model.nex'
+    model_file.write_text(
+        (DATA / 'partitioned.best_model.nex')
+        .read_text(encoding='utf-8')
+        .replace(
+            'GTR+F+R2{0.5,0.5,0.5,1.5}',
+            'C2+R2{0.5,0.5,0.5,1.5}',
+        ),
+        encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match=r'substitution-mixture.*ambiguous'):
+        load_iqtree_site_rate_posteriors(
+            DATA / 'partitioned.siteprob',
+            report_file=DATA / 'partitioned.iqtree',
+            partition_file=model_file,
+        )
+
+
 def test_partitioned_posteriors_map_unequal_category_counts_and_speeds():
     model = load_iqtree_site_rate_posteriors(
         DATA / 'partitioned.siteprob',
@@ -975,6 +1002,32 @@ def test_elbo_gap_weighting_and_negative_length_match_tree_time_contract():
 
     assert observed == pytest.approx(expected, abs=1e-12)
     assert model.prob_t_profiles_elbo(base_gtr, profiles, [1.0, 1.0], -0.1, return_log=True) == -ttconf.BIG_NUMBER
+
+
+def test_polytomy_rate_uses_gap_excluding_scalar_normalization():
+    model = load_iqtree_site_rates(DATA / 'unpartitioned.rate')
+    alphabet = GTR.standard('JC69', alphabet='nuc').alphabet
+    exchangeability = np.ones((len(alphabet), len(alphabet)))
+    np.fill_diagonal(exchangeability, 0)
+    gap_index = int(np.flatnonzero(alphabet == '-')[0])
+    exchangeability[gap_index, :] = 100
+    exchangeability[:, gap_index] = 100
+    exchangeability[gap_index, gap_index] = 0
+    base_gtr = GTR.custom(
+        mu=1.0,
+        pi=[0.24, 0.24, 0.24, 0.24, 0.04],
+        W=exchangeability,
+        alphabet=alphabet,
+    )
+    site_gtr, scalar_gtr = build_site_rate_gtrs(model, base_gtr)
+    tree_time = TreeTime.__new__(TreeTime)
+    tree_time.site_rate_model = model
+    tree_time.site_rate_base_gtr = scalar_gtr
+    tree_time._gtr = site_gtr
+    tree_time.data = SimpleNamespace(full_length=model.sequence_length)
+
+    assert not np.isclose(site_gtr.mu.sum(), model.sequence_length)
+    assert tree_time._alignment_mutation_rate() == pytest.approx(model.sequence_length)
 
 
 @pytest.mark.parametrize(

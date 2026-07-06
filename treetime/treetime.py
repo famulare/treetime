@@ -1034,6 +1034,20 @@ class TreeTime(ClockTree):
 
     def _alignment_mutation_rate(self):
         """Return the mutation-event rate summed over alignment sites."""
+        if self.site_rate_model is not None:
+            mean_rates = np.asarray(self.site_rate_model.mean_rates)
+            if mean_rates.shape != (self.data.full_length,):
+                raise ValueError('site-rate model must have one mean rate per alignment site')
+            if self.site_rate_base_gtr is None:
+                raise ValueError('site-rate models require a scalar base GTR')
+            base_rate = np.asarray(self.site_rate_base_gtr.average_rate())
+            if base_rate.ndim != 0 or not np.isfinite(base_rate) or base_rate <= 0:
+                raise ValueError('site-rate scalar base GTR must have a positive finite average rate')
+            # GTR_site_specific.mu is an internal matrix scale. With a gap
+            # state, its normalization includes gap exchangeabilities, whereas
+            # TreeTime's scalar mutation-event rate excludes gaps.
+            return float(base_rate * mean_rates.sum())
+
         rate_scale = np.asarray(self.gtr.mu)
         if rate_scale.ndim == 0:
             return float(rate_scale * self.data.full_length)

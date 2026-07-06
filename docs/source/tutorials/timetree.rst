@@ -100,6 +100,13 @@ the IQ-TREE report and the per-site category probabilities:
      --site-rate-posteriors iqtree.siteprob \
      --site-rate-report iqtree.iqtree --outdir dated-elbo
 
+IQ-TREE uses the same generic ``.siteprob`` column names for ``-wspr``,
+``-wspm``, and ``-wspmr``, and its standard report does not record which option
+wrote the file. For a single-matrix substitution model, IQ-TREE always writes
+rate-category probabilities, so this output is unambiguous. TreeTime rejects
+substitution-mixture models because mixture-class probabilities could otherwise
+be mistaken for rate-category probabilities when the column counts match.
+
 ``--site-rates iqtree.rate`` may be added to the second command as a strict
 posterior-mean cross-check. IQ-TREE caps some reported ``.rate`` values at 100;
 if that censoring occurs, omit this optional cross-check.

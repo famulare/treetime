@@ -11,6 +11,31 @@ from .site_rate_model import SiteRateModel
 _INTEGER = re.compile(r'[1-9][0-9]*\Z')
 _NUMBER = re.compile(r'(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z')
 _COORDINATE_TOKEN = re.compile(r'\s*([0-9]+|[-,\\/])')
+_NAMED_MIXTURE_MODELS = {
+    'CF4',
+    'EHO',
+    'EX2',
+    'EX3',
+    'EX_EHO',
+    'JTTCF4G',
+    'LG4',
+    'LG4M',
+    'LG4X',
+    'UL2',
+    'UL3',
+}
+
+
+def _is_mixture_model_expression(expression):
+    """Recognize IQ-TREE substitution-mixture syntax and built-in names."""
+    expression = expression.upper()
+    if 'MIX{' in expression:
+        return True
+    for component in re.split(r'[+*]', expression):
+        name = component.split('{', maxsplit=1)[0]
+        if name in _NAMED_MIXTURE_MODELS or re.fullmatch(r'C[0-9]+(?:OPT|TEST)?', name):
+            return True
+    return False
 
 
 def _read_text(path, description):
@@ -563,6 +588,11 @@ def _parse_partition_freerate_models(path, partition_names):
     maximum_prior_deviation = 0.0
     for entry in _split_top_level(charpartition, ','):
         model_expression, target = _top_level_partition(entry)
+        if _is_mixture_model_expression(model_expression):
+            raise ValueError(
+                f'{path}: substitution-mixture models have ambiguous .siteprob columns; '
+                'posterior-elbo requires a single-matrix IQ-TREE model'
+            )
         target_name = target
         for index, character in enumerate(target):
             if character == '{':
@@ -582,6 +612,11 @@ def _parse_partition_freerate_models(path, partition_names):
 
 def _parse_report_freerate_model(path):
     lines = _read_text(path, 'IQ-TREE report').splitlines()
+    if any('Mixture model of substitution:' in line for line in lines):
+        raise ValueError(
+            f'{path}: substitution-mixture models have ambiguous .siteprob columns; '
+            'posterior-elbo requires a single-matrix IQ-TREE model'
+        )
     model_lines = [
         line.split(':', maxsplit=1)[1].strip()
         for line in lines
@@ -860,6 +895,7 @@ def load_iqtree_site_rate_posteriors(
         'partition_file': str(Path(partition_file)) if partition_file is not None else None,
         'report_file': str(Path(report_file)),
         'partition_model': partition_mode,
+        'siteprob_mode': 'rate-category (single-matrix IQ-TREE model)',
         'category_counts': category_counts,
         'normalization_constant': normalization_constant,
         'renormalized_posterior_rows': renormalized_posterior_rows,
