@@ -1,3 +1,8 @@
+# Unreleased
+
+- add opt-in IQ-TREE site-rate-aware time-tree inference. Posterior-mean mode uses validated `.rate` values, while `posterior-elbo` mode evaluates a frozen-responsibility empirical-Bayes ELBO from FreeRate `.siteprob` output. Both modes preserve the scalar substitution model, use uncompressed marginal branch likelihoods, validate partition coordinates and speeds, and write an auditable global site mapping.
+- fix greedy and stochastic polytomy resolution treating a site-specific GTR rate vector as a scalar mutation rate.
+
 # 0.12.1
 
 - fix `infer_ancestral_sequences` silently falling back to joint reconstruction instead of marginal in all iterations after the first when `branch_length_mode='marginal'` [issue #601](https://github.com/neherlab/treetime/issues/601) [PR #602](https://github.com/neherlab/treetime/pull/602)

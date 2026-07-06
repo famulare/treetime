@@ -543,6 +543,15 @@ Acceptance targets:
 If a large input is expected to take hours, the CLI SHOULD print an estimate or
 at minimum a warning based on `branches * L * K * grid_points`.
 
+The implementation includes the reproducible
+`test/benchmark_site_rate_model.py` benchmark rather than a timing assertion in
+CI. A reference run during integration measured Tier B/Tier A ratios of
+approximately 2.0--2.1 for `L=1,000, K=4, P=1`, 5.6--6.6 for
+`L=1,000, K=6, P=3`, and 4.6--5.4 end to end for a generated
+`L=400, tips=32, K=4, P=2` analysis. The end-to-end Tier B run had 19 MB of
+Python-tracked peak allocation. These values are hardware dependent; the
+script, grouping invariant tests, and 8x acceptance boundary are normative.
+
 ## 9. Test contract
 
 ### 9.1 Loader tests
@@ -615,6 +624,19 @@ Include:
 - amino-acid input if included in the documented support surface;
 - failure for VCF, joint mode, and compressed input.
 
+The checked-in integration simulation uses a six-tip fixed topology, 1,200
+sites alternating between rates 0.5 and 1.5, a true clock of 0.002, and known
+internal dates. It calculates responsibilities by exact pruning on guide trees
+at 0.8x, 1.0x, and 1.2x the generating branch scale; their mean entropy is
+about 0.675 nats (close to the two-category maximum `log(2)`). Acceptance
+tolerances are 20% for the Tier A/one-hot clock, 30% for the three diffuse
+guides, three years for Tier A/one-hot non-root dates, five years for diffuse
+non-root dates, five years for the Tier A/one-hot root, and seven years for
+the diffuse root. The seeded realization recovers clock rates 0.001710 for
+Tier A and one-hot Tier B and 0.001709 for all three diffuse guides; Tier A and
+one-hot dates are identical, and all internal-date errors remain within the
+stated bounds.
+
 ### 9.4 ELBO identity and calibration tests
 
 For small arrays of positive category likelihoods, test the variational
@@ -639,6 +661,16 @@ These are algebra and calibration tests, not an implementation of an exact
 FreeRate date engine. Scenarios MUST be selected before examining results.
 Desired agreement with a downstream clock estimate is not an acceptance
 criterion.
+
+The predeclared calibration analogue uses 200 observations from a two-rate
+Gaussian mixture (rates 0.5 and 1.5, equal priors, true scale 1, noise 0.35),
+400 seeded replicates, and guide scales at -10%, 0%, and +10% from truth. The
+frozen-responsibility estimator had mean biases -0.038, -0.001, and +0.039,
+respectively. Nominal 95% conditional-curvature intervals covered 58.5%,
+98.5%, and 62.8%. This deliberately exposes the guide-scale sensitivity and
+the fact that frozen-responsibility curvature is not calibrated FreeRate
+uncertainty; it is not evidence for widening those intervals by an arbitrary
+factor.
 
 ### 9.5 CI
 

@@ -84,7 +84,7 @@ class ClockTree(TreeAnc):
             Use FFT for calculation of convolution integrals if true (default).
             The alternative is kept to be able to reproduce previous behavior.
 
-         **kwargs:
+         kwargs
             Key word arguments passed on to the parent class (TreeAnc)
 
         """
@@ -125,40 +125,39 @@ class ClockTree(TreeAnc):
                     rtol=1e-10,
                 ):
                     raise ValueError('site-specific ancestral GTR rates do not match the site-rate model')
-            if self.site_rate_model.evaluation_mode == 'posterior-elbo':
-                if self.site_rate_base_gtr is None:
-                    raise ValueError('posterior-elbo mode requires a scalar base GTR')
-                if self.site_rate_base_gtr.is_site_specific:
-                    raise ValueError('site_rate_base_gtr must be scalar')
-                if not np.array_equal(self.gtr.alphabet, self.site_rate_base_gtr.alphabet):
-                    raise ValueError('site-rate GTR alphabets do not match')
-                if not np.allclose(
-                    self.gtr.Pi,
-                    self.site_rate_base_gtr.Pi[:, None],
-                    atol=1e-10,
-                    rtol=1e-10,
-                ):
-                    raise ValueError('site-specific and scalar GTR equilibrium frequencies do not match')
-                if not np.isclose(
-                    self.site_rate_base_gtr.average_rate(),
-                    1.0,
-                    atol=1e-10,
-                    rtol=1e-10,
-                ):
-                    raise ValueError('site_rate_base_gtr must have unit mean rate')
-                site_generator_scales = np.einsum('a,ij->aij', self.gtr.mu, self.gtr.W)
-                expected_generator_scales = np.einsum(
-                    'a,ij->aij',
-                    self.site_rate_model.mean_rates * self.site_rate_base_gtr.mu,
-                    self.site_rate_base_gtr.W,
-                )
-                if not np.allclose(
-                    site_generator_scales,
-                    expected_generator_scales,
-                    atol=1e-10,
-                    rtol=1e-10,
-                ):
-                    raise ValueError('site-specific and scalar GTR generators do not match')
+            if self.site_rate_base_gtr is None:
+                raise ValueError('site-rate models require a scalar base GTR')
+            if self.site_rate_base_gtr.is_site_specific:
+                raise ValueError('site_rate_base_gtr must be scalar')
+            if not np.array_equal(self.gtr.alphabet, self.site_rate_base_gtr.alphabet):
+                raise ValueError('site-rate GTR alphabets do not match')
+            if not np.allclose(
+                self.gtr.Pi,
+                self.site_rate_base_gtr.Pi[:, None],
+                atol=1e-10,
+                rtol=1e-10,
+            ):
+                raise ValueError('site-specific and scalar GTR equilibrium frequencies do not match')
+            if not np.isclose(
+                self.site_rate_base_gtr.average_rate(),
+                1.0,
+                atol=1e-10,
+                rtol=1e-10,
+            ):
+                raise ValueError('site_rate_base_gtr must have unit mean rate')
+            site_generator_scales = np.einsum('a,ij->aij', self.gtr.mu, self.gtr.W)
+            expected_generator_scales = np.einsum(
+                'a,ij->aij',
+                self.site_rate_model.mean_rates * self.site_rate_base_gtr.mu,
+                self.site_rate_base_gtr.W,
+            )
+            if not np.allclose(
+                site_generator_scales,
+                expected_generator_scales,
+                atol=1e-10,
+                rtol=1e-10,
+            ):
+                raise ValueError('site-specific and scalar GTR generators do not match')
         self.clock_model = None
         self.use_covariation = use_covariation  # if false, covariation will be ignored in rate estimates.
         self._set_precision(precision)

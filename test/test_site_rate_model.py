@@ -1,3 +1,4 @@
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,7 @@ from Bio.Align import MultipleSeqAlignment
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
-from treetime import GTR, TreeTime, UnknownMethodError
+from treetime import GTR, TreeAnc, TreeTime, UnknownMethodError
 from treetime.branch_len_interpolator import BranchLenInterpolator
 from treetime.gtr_site_specific import GTR_site_specific
 from treetime.iqtree_site_rates import (
@@ -93,6 +94,76 @@ def test_create_gtr_does_not_mutate_inference_configuration(tmp_path):
 
     assert isinstance(loaded, GTR)
     assert params.gtr == 'infer'
+
+
+def test_shared_gtr_inference_weights_exposure_by_known_site_rate(monkeypatch):
+    tree = Phylo.read(StringIO('(a:0.1,b:0.1,c:0.1);'), 'newick')
+    alignment = MultipleSeqAlignment(
+        [
+            SeqRecord(Seq('AACC'), id='a'),
+            SeqRecord(Seq('AACC'), id='b'),
+            SeqRecord(Seq('AACC'), id='c'),
+        ]
+    )
+    tree_anc = TreeAnc(
+        tree=tree,
+        aln=alignment,
+        gtr=GTR.standard('JC69', alphabet='nuc'),
+        compress=False,
+        verbose=0,
+    )
+    tree_anc.infer_ancestral_sequences('probabilistic', marginal=False)
+    captured = {}
+    original_infer = GTR.infer.__func__
+
+    def capture_exposure(cls, nij, Ti, root_state, **kwargs):
+        captured['exposure'] = Ti.copy()
+        return original_infer(cls, nij, Ti, root_state, **kwargs)
+
+    monkeypatch.setattr(GTR, 'infer', classmethod(capture_exposure))
+    tree_anc.infer_gtr(
+        marginal=False,
+        site_rate_weights=np.array([0.5, 0.5, 1.5, 1.5]),
+    )
+
+    exposure = captured['exposure']
+    assert exposure[tree_anc.gtr.state_index['C']] == pytest.approx(3 * exposure[tree_anc.gtr.state_index['A']])
+
+
+def test_weighted_joint_gtr_inference_scales_mutation_midpoint_exposure(monkeypatch):
+    tree = Phylo.read(StringIO('(a:0.1,b:0.1,c:0.1);'), 'newick')
+    alignment = MultipleSeqAlignment(
+        [
+            SeqRecord(Seq('A'), id='a'),
+            SeqRecord(Seq('A'), id='b'),
+            SeqRecord(Seq('C'), id='c'),
+        ]
+    )
+    tree_anc = TreeAnc(
+        tree=tree,
+        aln=alignment,
+        gtr=GTR.standard('JC69', alphabet='nuc'),
+        compress=False,
+        verbose=0,
+    )
+    tree_anc.infer_ancestral_sequences('probabilistic', marginal=False)
+    captured = {}
+    original_infer = GTR.infer.__func__
+
+    def capture_exposure(cls, nij, Ti, root_state, **kwargs):
+        captured['exposure'] = Ti.copy()
+        return original_infer(cls, nij, Ti, root_state, **kwargs)
+
+    monkeypatch.setattr(GTR, 'infer', classmethod(capture_exposure))
+    tree_anc.infer_gtr(
+        marginal=False,
+        site_rate_weights=np.array([0.25]),
+    )
+
+    exposure = captured['exposure']
+    assert exposure[tree_anc.gtr.state_index['A']] == pytest.approx(0.0625)
+    assert exposure[tree_anc.gtr.state_index['C']] == pytest.approx(0.0125)
+    assert np.all(exposure >= 0)
 
 
 def test_posterior_model_validation_and_immutability():
@@ -298,6 +369,36 @@ def test_partitioned_posteriors_map_unequal_category_counts_and_speeds():
     )
     np.testing.assert_allclose(model.posterior_weights[:, 2], [0, 1, 0, 0, 0, 0])
     assert model.metadata['category_counts'] == (2, 3)
+
+
+def test_elbo_reuses_transition_matrices_by_partition_rate_group(monkeypatch):
+    model = load_iqtree_site_rate_posteriors(
+        DATA / 'partitioned.siteprob',
+        report_file=DATA / 'partitioned.iqtree',
+        sequence_length=6,
+        partition_file=DATA / 'partitioned.best_model.nex',
+    )
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    original_expqt = base_gtr.expQt
+    calls = []
+
+    def counted_expqt(branch_length):
+        calls.append(branch_length)
+        return original_expqt(branch_length)
+
+    monkeypatch.setattr(base_gtr, 'expQt', counted_expqt)
+    profiles = np.full((2, 6, len(base_gtr.alphabet)), 1 / len(base_gtr.alphabet))
+    model.prob_t_profiles_elbo(
+        base_gtr,
+        profiles,
+        np.ones(6),
+        0.1,
+        return_log=True,
+    )
+
+    expected_calls = sum(len(valid_categories) for _, valid_categories in model._rate_groups)
+    assert len(calls) == expected_calls
+    assert len(calls) < model.sequence_length * model.posterior_weights.shape[1]
 
 
 def test_rate_and_posterior_cross_check_rejects_category_mismatch(tmp_path):
@@ -703,6 +804,31 @@ def test_custom_gtr_scaling_is_compared_by_effective_generator():
     assert tree_time.site_rate_base_gtr is scalar_gtr
 
 
+def test_mean_mode_rejects_global_site_gtr_scaling_that_confounds_the_clock():
+    model = SiteRateModel(
+        mean_rates=[0.5, 1.5],
+        partition_index=[0, 0],
+        partition_site=[1, 2],
+        partition_names=('alignment',),
+        partition_speeds=[1.0],
+    )
+    site_gtr, scalar_gtr = build_site_rate_gtrs(model, GTR.standard('JC69', alphabet='nuc'))
+    site_gtr._mu *= 2
+    tree, alignment, dates = _tiny_treetime_inputs()
+
+    with pytest.raises(ValueError, match='generators do not match'):
+        TreeTime(
+            tree=tree,
+            aln=alignment,
+            dates=dates,
+            gtr=site_gtr,
+            compress=False,
+            branch_length_mode='marginal',
+            site_rate_model=model,
+            site_rate_base_gtr=scalar_gtr,
+        )
+
+
 def test_treetime_rejects_site_rate_length_mismatch():
     base_gtr = GTR.standard('JC69', alphabet='nuc')
     model = SiteRateModel(
@@ -773,6 +899,53 @@ def test_frozen_elbo_matches_guide_gradient_but_omits_score_curvature():
     assert frozen_gradient == pytest.approx(exact_gradient, abs=1e-8)
     assert exact_curvature > 0
     assert frozen_curvature == pytest.approx(0.0, abs=1e-8)
+
+
+def test_guide_scale_perturbation_quantifies_bias_and_conditional_coverage():
+    """Predeclared two-rate Gaussian analogue of the frozen-responsibility handoff."""
+    rng = np.random.default_rng(20260705)
+    rates = np.array([0.5, 1.5])
+    prior = np.array([0.5, 0.5])
+    true_scale = 1.0
+    noise = 0.35
+    site_count = 200
+    replicates = 400
+    metrics = {}
+
+    for relative_guide_error in (-0.1, 0.0, 0.1):
+        estimates = []
+        covered = []
+        guide_scale = true_scale * (1 + relative_guide_error)
+        for _ in range(replicates):
+            categories = rng.choice(2, size=site_count, p=prior)
+            observations = true_scale * rates[categories] + rng.normal(0, noise, size=site_count)
+            log_responsibility = (
+                np.log(prior)[None, :] - 0.5 * ((observations[:, None] - guide_scale * rates[None, :]) / noise) ** 2
+            )
+            log_responsibility -= log_responsibility.max(axis=1, keepdims=True)
+            responsibility = np.exp(log_responsibility)
+            responsibility /= responsibility.sum(axis=1, keepdims=True)
+
+            curvature = np.sum(responsibility * rates[None, :] ** 2) / noise**2
+            estimate = np.sum(responsibility * rates[None, :] * observations[:, None]) / noise**2 / curvature
+            standard_error = 1 / np.sqrt(curvature)
+            estimates.append(estimate)
+            covered.append(abs(estimate - true_scale) <= 1.96 * standard_error)
+
+        metrics[relative_guide_error] = (
+            float(np.mean(estimates) - true_scale),
+            float(np.mean(covered)),
+        )
+
+    guide_bias, guide_coverage = metrics[0.0]
+    low_bias, low_coverage = metrics[-0.1]
+    high_bias, high_coverage = metrics[0.1]
+    assert abs(guide_bias) < 0.005
+    assert 0.95 <= guide_coverage <= 1.0
+    assert -0.05 < low_bias < -0.03
+    assert 0.03 < high_bias < 0.05
+    assert 0.5 < low_coverage < 0.7
+    assert 0.5 < high_coverage < 0.7
 
 
 def test_elbo_gap_weighting_and_negative_length_match_tree_time_contract():

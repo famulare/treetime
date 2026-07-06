@@ -1,6 +1,9 @@
 """Validated site-rate data used by TreeTime date inference."""
 
+import csv
 from dataclasses import dataclass, field
+import json
+from pathlib import Path
 from types import MappingProxyType
 
 import numpy as np
@@ -239,10 +242,11 @@ def build_site_rate_gtrs(site_rate_model, base_gtr):
     from .gtr import GTR
     from .gtr_site_specific import GTR_site_specific
 
+    exchangeability = 0.5 * (base_gtr.W + base_gtr.W.T)
     scalar_gtr = GTR.custom(
         mu=1.0,
         pi=base_gtr.Pi,
-        W=base_gtr.W,
+        W=exchangeability,
         alphabet=base_gtr.alphabet,
         prof_map=base_gtr.profile_map,
     )
@@ -258,3 +262,69 @@ def build_site_rate_gtrs(site_rate_model, base_gtr):
         W=scalar_gtr.W,
     )
     return site_gtr, scalar_gtr
+
+
+def _json_value(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, MappingProxyType):
+        value = dict(value)
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_value(item) for item in value]
+    return value
+
+
+def write_site_rate_audit(site_rate_model, output_directory):
+    """Write inspectable site mapping and metadata for one site-rate run."""
+    output_directory = Path(output_directory)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    table_path = output_directory / 'site_rate_model.tsv'
+    metadata_path = output_directory / 'site_rate_model.json'
+
+    with table_path.open('w', encoding='utf-8', newline='') as handle:
+        writer = csv.writer(handle, delimiter='\t', lineterminator='\n')
+        writer.writerow(['site', 'partition', 'partition_site', 'partition_speed', 'posterior_mean_rate'])
+        for coordinate in range(site_rate_model.sequence_length):
+            partition = int(site_rate_model.partition_index[coordinate])
+            writer.writerow(
+                [
+                    coordinate + 1,
+                    site_rate_model.partition_names[partition],
+                    int(site_rate_model.partition_site[coordinate]),
+                    f'{site_rate_model.partition_speeds[partition]:.12g}',
+                    f'{site_rate_model.mean_rates[coordinate]:.12g}',
+                ]
+            )
+
+    from . import version
+
+    category_counts = None
+    if site_rate_model.category_mask is not None:
+        category_counts = []
+        for partition in range(len(site_rate_model.partition_names)):
+            counts = np.unique(site_rate_model.category_mask[site_rate_model.partition_index == partition].sum(axis=1))
+            category_counts.append(int(counts[0]) if len(counts) == 1 else counts.tolist())
+    metadata = {
+        'schema_version': 1,
+        'treetime_version': version,
+        'evaluation_mode': site_rate_model.evaluation_mode,
+        'sequence_length': site_rate_model.sequence_length,
+        'partition_names': site_rate_model.partition_names,
+        'partition_speeds': site_rate_model.partition_speeds,
+        'category_counts': category_counts,
+        'global_mean_rate': float(site_rate_model.mean_rates.mean()),
+        'validation_tolerances': {
+            'model_normalization_absolute': _NORMALIZATION_TOLERANCE,
+            'probability_row_absolute': _PROBABILITY_TOLERANCE,
+            'iqtree_probability_sum_absolute': 1e-5,
+            'rate_crosscheck_absolute': 2e-5,
+            'rate_crosscheck_relative': 2e-4,
+        },
+        'source_metadata': site_rate_model.metadata,
+    }
+    metadata_path.write_text(json.dumps(_json_value(metadata), indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    return table_path, metadata_path
