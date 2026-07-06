@@ -40,7 +40,7 @@ def _site_rate_params(**changes):
         'sequence_length': None,
         'site_rate_mode': 'mean',
         'site_rate_model': None,
-        'site_rate_posteriors': None,
+        'site_rate_loglh': None,
         'site_rate_report': None,
         'site_rates': str(DATA / 'tiny.rate'),
         'tree': str(DATA / 'tiny.nwk'),
@@ -84,8 +84,8 @@ def _run_cli(output_directory, mode):
             [
                 '--site-rate-mode',
                 'posterior-elbo',
-                '--site-rate-posteriors',
-                str(DATA / 'tiny.siteprob'),
+                '--site-rate-loglh',
+                str(DATA / 'tiny.sitelh'),
                 '--site-rate-report',
                 str(DATA / 'tiny.iqtree'),
             ]
@@ -115,8 +115,8 @@ def test_site_rate_flags_are_public_timetree_options():
             'analysis.rate',
             '--site-rate-mode',
             'posterior-elbo',
-            '--site-rate-posteriors',
-            'analysis.siteprob',
+            '--site-rate-loglh',
+            'analysis.sitelh',
             '--site-rate-report',
             'analysis.iqtree',
             '--site-rate-model',
@@ -126,7 +126,7 @@ def test_site_rate_flags_are_public_timetree_options():
 
     assert params.site_rates == 'analysis.rate'
     assert params.site_rate_mode == 'posterior-elbo'
-    assert params.site_rate_posteriors == 'analysis.siteprob'
+    assert params.site_rate_loglh == 'analysis.sitelh'
     assert params.site_rate_report == 'analysis.iqtree'
     assert params.site_rate_model == 'analysis.best_model.nex'
 
@@ -177,9 +177,9 @@ def test_cli_requires_shared_tree_before_topology_inference(monkeypatch):
 @pytest.mark.parametrize(
     ('changes', 'message'),
     [
-        ({'site_rate_mode': 'posterior-elbo'}, 'requires --site-rate-posteriors'),
+        ({'site_rate_mode': 'posterior-elbo'}, 'requires --site-rate-loglh'),
         ({'site_rates': None}, 'requires --site-rates'),
-        ({'site_rates': None, 'site_rate_posteriors': 'x.siteprob'}, 'requires --site-rate-report'),
+        ({'site_rates': None, 'site_rate_loglh': 'x.sitelh'}, 'requires --site-rate-report'),
     ],
 )
 def test_cli_site_rate_inputs_fail_closed(changes, message):
@@ -191,7 +191,7 @@ def test_complete_posterior_input_can_supply_tier_a_means():
     model = _load_site_rate_model(
         _site_rate_params(
             site_rates=None,
-            site_rate_posteriors=str(DATA / 'tiny.siteprob'),
+            site_rate_loglh=str(DATA / 'tiny.sitelh'),
             site_rate_report=str(DATA / 'tiny.iqtree'),
         ),
         sequence_length=50,
@@ -204,7 +204,7 @@ def test_complete_posterior_input_can_supply_tier_a_means():
 
 def test_posterior_confidence_warning_states_conditional_semantics(capsys):
     model = load_iqtree_site_rate_posteriors(
-        DATA / 'tiny.siteprob',
+        DATA / 'tiny.sitelh',
         report_file=DATA / 'tiny.iqtree',
         sequence_length=50,
     )
@@ -642,7 +642,7 @@ def test_site_rate_model_survives_polytomy_resolution(tmp_path, stochastic):
         encoding='utf-8',
     )
     model = load_iqtree_site_rate_posteriors(
-        DATA / 'tiny.siteprob',
+        DATA / 'tiny.sitelh',
         report_file=DATA / 'tiny.iqtree',
         sequence_length=50,
     )

@@ -432,7 +432,7 @@ def test_real_iqtree_partition_outputs_preserve_writer_units_and_coordinates():
         report_file=REAL_IQTREE_DATA / 'generated.iqtree',
     )
     tier_b = load_iqtree_site_rate_posteriors(
-        REAL_IQTREE_DATA / 'generated.siteprob',
+        REAL_IQTREE_DATA / 'generated.sitelh',
         sequence_length=50,
         partition_file=REAL_IQTREE_DATA / 'generated.best_model.nex',
         report_file=REAL_IQTREE_DATA / 'generated.iqtree',
@@ -473,7 +473,7 @@ def test_real_iqtree_interleaved_outputs_map_each_source_row_to_global_axis():
         report_file=data / 'generated.iqtree',
     )
     tier_b = load_iqtree_site_rate_posteriors(
-        data / 'generated.siteprob',
+        data / 'generated.sitelh',
         report_file=data / 'generated.iqtree',
         sequence_length=50,
         partition_file=data / 'generated.best_model.nex',
@@ -520,7 +520,7 @@ def test_edge_equal_model_uses_reported_unit_speeds():
 
 def test_unpartitioned_posteriors_build_normalized_category_model():
     model = load_iqtree_site_rate_posteriors(
-        DATA / 'unpartitioned.siteprob',
+        DATA / 'unpartitioned.sitelh',
         report_file=DATA / 'unpartitioned.iqtree',
         rate_file=DATA / 'unpartitioned.rate',
     )
@@ -541,7 +541,7 @@ def test_unpartitioned_report_length_must_match_posteriors(tmp_path):
     )
     with pytest.raises(ValueError, match='alignment length'):
         load_iqtree_site_rate_posteriors(
-            DATA / 'unpartitioned.siteprob',
+            DATA / 'unpartitioned.sitelh',
             report_file=report,
         )
 
@@ -554,15 +554,15 @@ def test_unpartitioned_report_must_identify_freerate_model(tmp_path):
     )
     with pytest.raises(ValueError, match=r'requires one IQ-TREE \+R'):
         load_iqtree_site_rate_posteriors(
-            DATA / 'unpartitioned.siteprob',
+            DATA / 'unpartitioned.sitelh',
             report_file=report,
         )
 
 
-def test_mixture_class_siteprob_is_rejected_even_when_width_matches_freerate():
+def test_mixture_class_sitelh_is_rejected_even_when_width_matches_freerate():
     with pytest.raises(ValueError, match=r'substitution-mixture.*ambiguous'):
         load_iqtree_site_rate_posteriors(
-            DATA / 'unpartitioned.siteprob',
+            DATA / 'unpartitioned.sitelh',
             report_file=DATA / 'mixture_wspm.iqtree',
         )
 
@@ -580,7 +580,7 @@ def test_partition_mixture_model_is_rejected_even_when_width_matches_freerate(tm
     )
     with pytest.raises(ValueError, match=r'substitution-mixture.*ambiguous'):
         load_iqtree_site_rate_posteriors(
-            DATA / 'partitioned.siteprob',
+            DATA / 'partitioned.sitelh',
             report_file=DATA / 'partitioned.iqtree',
             partition_file=model_file,
         )
@@ -588,7 +588,7 @@ def test_partition_mixture_model_is_rejected_even_when_width_matches_freerate(tm
 
 def test_partitioned_posteriors_map_unequal_category_counts_and_speeds():
     model = load_iqtree_site_rate_posteriors(
-        DATA / 'partitioned.siteprob',
+        DATA / 'partitioned.sitelh',
         report_file=DATA / 'partitioned.iqtree',
         partition_file=DATA / 'partitioned.best_model.nex',
         rate_file=DATA / 'partitioned.rate',
@@ -615,7 +615,7 @@ def test_partitioned_posteriors_map_unequal_category_counts_and_speeds():
 
 def test_elbo_reuses_transition_matrices_by_partition_rate_group(monkeypatch):
     model = load_iqtree_site_rate_posteriors(
-        DATA / 'partitioned.siteprob',
+        DATA / 'partitioned.sitelh',
         report_file=DATA / 'partitioned.iqtree',
         sequence_length=6,
         partition_file=DATA / 'partitioned.best_model.nex',
@@ -645,7 +645,7 @@ def test_elbo_reuses_transition_matrices_by_partition_rate_group(monkeypatch):
 
 def test_elbo_is_invariant_to_partition_row_order_after_mapping():
     model = load_iqtree_site_rate_posteriors(
-        DATA / 'partitioned.siteprob',
+        DATA / 'partitioned.sitelh',
         report_file=DATA / 'partitioned.iqtree',
         partition_file=DATA / 'partitioned.best_model.nex',
     )
@@ -680,7 +680,7 @@ def test_rate_and_posterior_cross_check_rejects_category_mismatch(tmp_path):
     )
     with pytest.raises(ValueError, match='cross-check failed'):
         load_iqtree_site_rate_posteriors(
-            DATA / 'partitioned.siteprob',
+            DATA / 'partitioned.sitelh',
             report_file=DATA / 'partitioned.iqtree',
             partition_file=DATA / 'partitioned.best_model.nex',
             rate_file=rate_file,
@@ -695,13 +695,13 @@ def test_censored_rate_cross_check_fails_with_focused_message(tmp_path):
     )
     with pytest.raises(ValueError, match='censors posterior mean rates'):
         load_iqtree_site_rate_posteriors(
-            DATA / 'unpartitioned.siteprob',
+            DATA / 'unpartitioned.sitelh',
             report_file=DATA / 'unpartitioned.iqtree',
             rate_file=rate_file,
         )
 
 
-def test_siteprob_rows_allow_small_rounding_only(tmp_path):
+def test_sitelh_rows_allow_small_rounding_only(tmp_path):
     report = tmp_path / 'one_site.iqtree'
     report.write_text(
         (DATA / 'unpartitioned.iqtree')
@@ -709,9 +709,12 @@ def test_siteprob_rows_allow_small_rounding_only(tmp_path):
         .replace('with 3 nucleotide sites', 'with 1 nucleotide sites'),
         encoding='utf-8',
     )
-    rounded = tmp_path / 'rounded.siteprob'
+    # LnL=0, LnLW_k=log(p_k) makes exp(LnLW_k - LnL) reconstruct p_k exactly.
+    # The -wslr precision loosening admits a ~2e-6 sum-1 deviation for renormalization.
+    log_half_rounded = float(np.log(0.500001))
+    rounded = tmp_path / 'rounded.sitelh'
     rounded.write_text(
-        'Site\tp1\tp2\n1\t0.500001\t0.500001\n',
+        f'Site\tLnL\tLnLW_1\tLnLW_2\n1\t0.000000\t{log_half_rounded:.6f}\t{log_half_rounded:.6f}\n',
         encoding='utf-8',
     )
     model = load_iqtree_site_rate_posteriors(
@@ -721,8 +724,13 @@ def test_siteprob_rows_allow_small_rounding_only(tmp_path):
     )
     assert model.metadata['renormalized_posterior_rows'] == 1
 
-    malformed = tmp_path / 'malformed.siteprob'
-    malformed.write_text('Site\tp1\tp2\n1\t0.7\t0.7\n', encoding='utf-8')
+    # Reconstructed responsibilities summing to 1.4 exceed the 1e-3 tolerance.
+    log_seven_tenths = float(np.log(0.7))
+    malformed = tmp_path / 'malformed.sitelh'
+    malformed.write_text(
+        f'Site\tLnL\tLnLW_1\tLnLW_2\n1\t0.000000\t{log_seven_tenths:.6f}\t{log_seven_tenths:.6f}\n',
+        encoding='utf-8',
+    )
     with pytest.raises(ValueError, match='expected one'):
         load_iqtree_site_rate_posteriors(
             malformed,
@@ -742,7 +750,7 @@ def test_unverified_invariant_output_is_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match=r'\+I\+R'):
         load_iqtree_site_rate_posteriors(
-            DATA / 'unpartitioned.siteprob',
+            DATA / 'unpartitioned.sitelh',
             report_file=report,
         )
 
@@ -755,7 +763,7 @@ def _one_hot_profiles(gtr, parent_states, child_states):
 def test_elbo_evaluator_matches_hand_calculation():
     base_gtr = GTR.standard('JC69', alphabet='nuc')
     model = load_iqtree_site_rate_posteriors(
-        DATA / 'unpartitioned.siteprob',
+        DATA / 'unpartitioned.sitelh',
         report_file=DATA / 'unpartitioned.iqtree',
     )
     profiles = _one_hot_profiles(base_gtr, [0, 0, 0], [0, 1, 0])
@@ -908,7 +916,7 @@ def test_site_specific_large_rate_transition_matches_matrix_exponential():
 def test_branch_interpolator_uses_elbo_without_node_model_state():
     base_gtr = GTR.standard('JC69', alphabet='nuc')
     model = load_iqtree_site_rate_posteriors(
-        DATA / 'unpartitioned.siteprob',
+        DATA / 'unpartitioned.sitelh',
         report_file=DATA / 'unpartitioned.iqtree',
     )
     tier_a_gtr, scalar_gtr = build_site_rate_gtrs(model, base_gtr)

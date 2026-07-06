@@ -347,9 +347,9 @@ def add_site_rate_args(parser):
         help='evaluate posterior-mean rates (default when site-rate input is present) or a frozen-responsibility ELBO',
     )
     parser.add_argument(
-        '--site-rate-posteriors',
-        metavar='SITEPROB_FILE',
-        help='IQ-TREE .siteprob file written by -wspr',
+        '--site-rate-loglh',
+        metavar='SITELH_FILE',
+        help='IQ-TREE .sitelh file written by -wslr',
     )
     parser.add_argument(
         '--site-rate-report',

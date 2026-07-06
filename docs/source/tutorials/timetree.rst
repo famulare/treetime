@@ -81,7 +81,7 @@ category responsibilities:
 .. code-block:: bash
 
    iqtree2 -s alignment.fasta -te tree.nwk -m GTR+F+R4 \
-     --rate -wspr --prefix iqtree
+     --rate -wslr --prefix iqtree
 
 The faster posterior-mean mode uses the resulting ``iqtree.rate``:
 
@@ -91,21 +91,23 @@ The faster posterior-mean mode uses the resulting ``iqtree.rate``:
      --site-rates iqtree.rate --site-rate-mode mean --outdir dated-mean
 
 The frozen-responsibility mode additionally uses the FreeRate categories in
-the IQ-TREE report and the per-site category probabilities:
+the IQ-TREE report and the per-site, per-category site log-likelihoods:
 
 .. code-block:: bash
 
    treetime --tree tree.nwk --dates dates.tsv --aln alignment.fasta \
      --site-rate-mode posterior-elbo \
-     --site-rate-posteriors iqtree.siteprob \
+     --site-rate-loglh iqtree.sitelh \
      --site-rate-report iqtree.iqtree --outdir dated-elbo
 
-IQ-TREE uses the same generic ``.siteprob`` column names for ``-wspr``,
-``-wspm``, and ``-wspmr``, and its standard report does not record which option
-wrote the file. For a single-matrix substitution model, IQ-TREE always writes
-rate-category probabilities, so this output is unambiguous. TreeTime rejects
-substitution-mixture models because mixture-class probabilities could otherwise
-be mistaken for rate-category probabilities when the column counts match.
+The ``-wslr`` ``.sitelh`` file records the total site log-likelihood ``LnL``
+and, per rate category ``k``, ``LnLW_k = log(category-k site-likelihood times
+category-k weight)``. TreeTime reconstructs the per-site category
+responsibility as ``q_k = exp(LnLW_k - LnL)``. For a single-matrix
+substitution model these are unambiguous rate-category posteriors. TreeTime
+rejects substitution-mixture models because mixture-class site-likelihoods
+could otherwise be mistaken for rate-category site-likelihoods when the column
+counts match.
 
 ``--site-rates iqtree.rate`` may be added to the second command as a strict
 posterior-mean cross-check. IQ-TREE caps some reported ``.rate`` values at 100;
@@ -121,7 +123,7 @@ partition model. For example:
 
    treetime --tree tree.nwk --dates dates.tsv --aln alignment.fasta \
      --site-rate-mode posterior-elbo \
-     --site-rate-posteriors iqtree.siteprob \
+     --site-rate-loglh iqtree.sitelh \
      --site-rate-report iqtree.iqtree \
      --site-rate-model iqtree.best_model.nex --outdir dated-elbo
 
@@ -147,8 +149,8 @@ FreeRate workflow.
      - ``.rate``
      - ``.rate``, ``.iqtree``, ``.best_model.nex``
    * - ``posterior-elbo``
-     - ``.siteprob``, ``.iqtree``
-     - ``.siteprob``, ``.iqtree``, ``.best_model.nex``
+     - ``.sitelh``, ``.iqtree``
+     - ``.sitelh``, ``.iqtree``, ``.best_model.nex``
 
 In ``mean`` mode, site ``i`` is evaluated at its posterior-mean relative rate
 ``r_i``. In ``posterior-elbo`` mode, TreeTime evaluates the date-dependent

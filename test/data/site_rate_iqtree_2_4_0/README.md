@@ -5,11 +5,13 @@ the included alignment, fixed tree, and unequal contiguous partitions:
 
 ```sh
 iqtree2 -s alignment.fasta -te tree.nwk -p partitions.nex \
-  -m GTR+F+R2 --rate -wspr --prefix generated --seed 1 -redo -nt 1
+  -m GTR+F+R2 --rate -wslr --prefix generated --seed 1 -redo -nt 1
 ```
 
-The checked-in writer outputs are `generated.rate`, `generated.siteprob`,
-`generated.iqtree`, and `generated.best_model.nex`. The report records
+The checked-in writer outputs are `generated.rate`, `generated.sitelh`,
+`generated.iqtree`, and `generated.best_model.nex`. The `.sitelh` file (written
+by `-wslr`) holds per-site, per-category log-likelihoods; TreeTime reconstructs
+the rate-category responsibility as `q_k = exp(LnLW_k - LnL)`. The report records
 partition speeds of 0.1246 and 3.0425, while each partition's raw `.rate`
 values have mean approximately one. This independently exercises IQ-TREE's
 within-partition rate convention before TreeTime applies partition speeds.

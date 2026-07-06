@@ -21,21 +21,20 @@ def _infer_gtr_from_params(params):
 
 def _site_rate_requested(params):
     return getattr(params, 'site_rate_mode', None) is not None or any(
-        getattr(params, name, None)
-        for name in ('site_rates', 'site_rate_posteriors', 'site_rate_report', 'site_rate_model')
+        getattr(params, name, None) for name in ('site_rates', 'site_rate_loglh', 'site_rate_report', 'site_rate_model')
     )
 
 
 def _load_site_rate_model(params, sequence_length):
     mode = params.site_rate_mode or 'mean'
     rate_file = params.site_rates
-    posterior_file = params.site_rate_posteriors
+    posterior_file = params.site_rate_loglh
     report_file = params.site_rate_report
     partition_file = params.site_rate_model
 
     if mode == 'posterior-elbo':
         if posterior_file is None or report_file is None:
-            raise ValueError('--site-rate-mode posterior-elbo requires --site-rate-posteriors and --site-rate-report')
+            raise ValueError('--site-rate-mode posterior-elbo requires --site-rate-loglh and --site-rate-report')
         return load_iqtree_site_rate_posteriors(
             posterior_file,
             report_file=report_file,
@@ -46,7 +45,7 @@ def _load_site_rate_model(params, sequence_length):
 
     if posterior_file is not None:
         if report_file is None:
-            raise ValueError('--site-rate-posteriors requires --site-rate-report')
+            raise ValueError('--site-rate-loglh requires --site-rate-report')
         posterior_model = load_iqtree_site_rate_posteriors(
             posterior_file,
             report_file=report_file,

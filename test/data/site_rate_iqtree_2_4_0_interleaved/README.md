@@ -6,8 +6,12 @@ partitions:
 
 ```sh
 iqtree2 -s alignment.fasta -te tree.nwk -p partitions_interleaved.nex \
-  -m GTR+F+R2 --rate -wspr --prefix generated --seed 1 -redo -nt 1
+  -m GTR+F+R2 --rate -wslr --prefix generated --seed 1 -redo -nt 1
 ```
+
+The `-wslr` `.sitelh` output holds per-site, per-category log-likelihoods;
+TreeTime reconstructs the rate-category responsibility as
+`q_k = exp(LnLW_k - LnL)`.
 
 `partitions_interleaved.nex` maps three charsets by codon position
 (`1-50\3`, `2-50\3`, `3-50\3`), so partition-local sites interleave on the global

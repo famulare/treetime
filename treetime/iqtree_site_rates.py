@@ -590,7 +590,7 @@ def _parse_partition_freerate_models(path, partition_names):
         model_expression, target = _top_level_partition(entry)
         if _is_mixture_model_expression(model_expression):
             raise ValueError(
-                f'{path}: substitution-mixture models have ambiguous .siteprob columns; '
+                f'{path}: substitution-mixture models have ambiguous .sitelh columns; '
                 'posterior-elbo requires a single-matrix IQ-TREE model'
             )
         target_name = target
@@ -614,7 +614,7 @@ def _parse_report_freerate_model(path):
     lines = _read_text(path, 'IQ-TREE report').splitlines()
     if any('Mixture model of substitution:' in line for line in lines):
         raise ValueError(
-            f'{path}: substitution-mixture models have ambiguous .siteprob columns; '
+            f'{path}: substitution-mixture models have ambiguous .sitelh columns; '
             'posterior-elbo requires a single-matrix IQ-TREE model'
         )
     model_lines = [
@@ -627,7 +627,7 @@ def _parse_report_freerate_model(path):
     model_name = model_lines[0]
     if '+I' in model_name:
         raise ValueError(
-            'IQ-TREE +I+R category output is not supported until its .siteprob '
+            'IQ-TREE +I+R category output is not supported until its .sitelh '
             'category convention is independently verified'
         )
     freerate_counts = []
@@ -668,7 +668,7 @@ def _parse_report_freerate_model(path):
         raise ValueError(f'{path}: FreeRate category table has no rows')
     if rows[0][0] == 0:
         raise ValueError(
-            'IQ-TREE +I+R category output is not supported until its .siteprob '
+            'IQ-TREE +I+R category output is not supported until its .sitelh '
             'category convention is independently verified'
         )
     expected_ids = list(range(1, len(rows) + 1))
@@ -696,14 +696,36 @@ def _validate_unpartitioned_report_length(path, sequence_length):
     if summary is None:
         raise ValueError(f'{path}: could not parse unpartitioned alignment length')
     if int(summary.group(1)) != sequence_length:
-        raise ValueError(f'{path}: reported alignment length does not match .siteprob')
+        raise ValueError(f'{path}: reported alignment length does not match .sitelh')
 
 
-def _read_siteprob_table(path):
-    text = _read_text(path, 'IQ-TREE .siteprob file')
+_SIGNED_NUMBER = re.compile(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z')
+
+
+def _parse_finite_number(value, *, field, line_number):
+    if not _SIGNED_NUMBER.fullmatch(value):
+        raise ValueError(f'line {line_number}: {field} is not a finite decimal number: {value!r}')
+    number = float(value)
+    if not np.isfinite(number):
+        raise ValueError(f'line {line_number}: {field} must be finite')
+    return number
+
+
+def _read_sitelh_table(path):
+    """Parse IQ-TREE ``-wslr`` ``.sitelh`` output into per-site category posteriors.
+
+    Rows carry ``LnL`` (total site log-likelihood) followed by consecutive
+    ``LnLW_k = log(category-k site-likelihood * category-k weight)``. The per-site
+    category responsibility is reconstructed as ``q_k = exp(LnLW_k - LnL)``; for
+    non-invariant models (+R) these reproduce IQ-TREE's ``-wspr`` ``.siteprob``
+    columns to writer precision (~1e-4). Partitioned files are detected by a
+    leading ``Part`` column and may emit ragged rows: partitions with fewer
+    categories print fewer ``LnLW`` values (the file's own R hint uses fill=TRUE).
+    """
+    text = _read_text(path, 'IQ-TREE .sitelh file')
     header = None
     records = []
-    probability_count = None
+    category_count = None
     partitioned = None
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
@@ -712,45 +734,47 @@ def _read_siteprob_table(path):
         fields = line.split()
         if header is None:
             header = fields
-            partitioned = header[:2] == ['Set', 'Site']
+            partitioned = header[:1] == ['Part']
             site_index = 1 if partitioned else 0
-            if not partitioned and header[:1] != ['Site']:
-                raise ValueError(f'{path}: expected Site or Set/Site header')
-            probability_names = header[site_index + 1 :]
-            expected_names = [f'p{index}' for index in range(1, len(probability_names) + 1)]
-            if not probability_names or probability_names != expected_names:
-                raise ValueError(f'{path}: posterior columns must be consecutive p1..pK')
-            probability_count = len(probability_names)
+            if header[site_index : site_index + 2] != ['Site', 'LnL']:
+                expected = 'Part Site LnL LnLW_1..LnLW_K' if partitioned else 'Site LnL LnLW_1..LnLW_K'
+                raise ValueError(f'{path}: expected header {expected!r}')
+            category_names = header[site_index + 2 :]
+            expected_names = [f'LnLW_{index}' for index in range(1, len(category_names) + 1)]
+            if not category_names or category_names != expected_names:
+                raise ValueError(f'{path}: category columns must be consecutive LnLW_1..LnLW_K')
+            category_count = len(category_names)
             continue
-        minimum_fields = 3 if partitioned else 2
+        minimum_fields = 4 if partitioned else 3
         if len(fields) < minimum_fields or len(fields) > len(header):
             raise ValueError(f'{path}: line {line_number} has an invalid number of fields')
         if partitioned:
-            partition_id = _parse_positive_integer(fields[0], field='Set', line_number=line_number)
+            partition_id = _parse_positive_integer(fields[0], field='Part', line_number=line_number)
             site_value = fields[1]
-            probability_values = fields[2:]
+            log_likelihood_value = fields[2]
+            category_values = fields[3:]
         else:
             partition_id = 1
             site_value = fields[0]
-            probability_values = fields[1:]
+            log_likelihood_value = fields[1]
+            category_values = fields[2:]
         local_site = _parse_positive_integer(site_value, field='Site', line_number=line_number)
-        probabilities = np.asarray(
-            [
-                _parse_nonnegative_number(value, field='site posterior probability', line_number=line_number)
-                for value in probability_values
-            ],
+        log_likelihood = _parse_finite_number(log_likelihood_value, field='site LnL', line_number=line_number)
+        category_log_weights = np.asarray(
+            [_parse_finite_number(value, field='category LnLW', line_number=line_number) for value in category_values],
             dtype=float,
         )
+        probabilities = np.exp(category_log_weights - log_likelihood)
         records.append((line_number, partition_id, local_site, probabilities))
     if header is None or not records:
-        raise ValueError(f'{path}: no posterior rows found')
-    return partitioned, probability_count, records
+        raise ValueError(f'{path}: no site-likelihood rows found')
+    return partitioned, category_count, records
 
 
 def _map_raw_rate_file(rate_file, *, partition_names, partition_coordinates, partitioned):
     header, records = _read_iqtree_table(rate_file, required_columns={'Site', 'Rate'})
     if ('Part' in header) != partitioned:
-        raise ValueError(f'{rate_file}: partition structure does not match .siteprob input')
+        raise ValueError(f'{rate_file}: partition structure does not match .sitelh input')
     length = sum(len(coordinates) for coordinates in partition_coordinates)
     rates = np.full(length, np.nan)
     for line_number, record in records:
@@ -773,19 +797,26 @@ def _map_raw_rate_file(rate_file, *, partition_names, partition_coordinates, par
 
 
 def load_iqtree_site_rate_posteriors(
-    siteprob_file,
+    sitelh_file,
     *,
     report_file,
     sequence_length=None,
     partition_file=None,
     rate_file=None,
 ):
-    """Load IQ-TREE ``-wspr`` output for frozen-responsibility ELBO dating."""
-    partitioned, maximum_columns, records = _read_siteprob_table(siteprob_file)
+    """Load IQ-TREE ``-wslr`` ``.sitelh`` output for frozen-responsibility ELBO dating.
+
+    The ``.sitelh`` file carries per-site, per-category log-likelihoods; the
+    category responsibilities used here are reconstructed as
+    ``q_k = exp(LnLW_k - LnL)``. For the currently supported +R models this is a
+    strict superset of the older ``-wspr`` ``.siteprob`` posteriors and matches
+    them to writer precision (~1e-4).
+    """
+    partitioned, maximum_columns, records = _read_sitelh_table(sitelh_file)
     if partitioned != (partition_file is not None):
         if partitioned:
-            raise ValueError('partitioned .siteprob input requires an IQ-TREE best-model file')
-        raise ValueError('partition_file was provided for an unpartitioned .siteprob file')
+            raise ValueError('partitioned .sitelh input requires an IQ-TREE best-model file')
+        raise ValueError('partition_file was provided for an unpartitioned .sitelh file')
 
     if partitioned:
         partition_names, partition_coordinates = parse_iqtree_partitions(
@@ -814,7 +845,7 @@ def load_iqtree_site_rate_posteriors(
 
     category_counts = tuple(len(model[0]) for model in partition_models)
     if max(category_counts) != maximum_columns:
-        raise ValueError(f'{siteprob_file}: posterior header category count does not match rate models')
+        raise ValueError(f'{sitelh_file}: posterior header category count does not match rate models')
     category_width = max(category_counts)
     posterior_weights = np.zeros((length, category_width), dtype=float)
     category_rates = np.zeros((length, category_width), dtype=float)
@@ -837,8 +868,12 @@ def load_iqtree_site_rate_posteriors(
                 f'line {line_number}: partition {partition_id} requires '
                 f'{expected_count} posterior columns, got {len(probabilities)}'
             )
+        # -wslr prints ~4-decimal log-likelihoods, so a reconstructed
+        # q_k = exp(LnLW_k - LnL) row can deviate from sum-1 by ~1e-4; loosen the
+        # per-row normalization tolerance accordingly (the strict 1e-5 tolerance is
+        # retained for the full-precision category-prior rows from the model files).
         normalized_probabilities, deviation = _normalize_probability_row(
-            probabilities, description=f'line {line_number} posterior row'
+            probabilities, description=f'line {line_number} posterior row', tolerance=1e-3
         )
         maximum_posterior_deviation = max(maximum_posterior_deviation, deviation)
         if deviation > 0:
@@ -855,7 +890,7 @@ def load_iqtree_site_rate_posteriors(
         partition_site[global_coordinate] = local_site
 
     if len(records) != length or np.any(partition_index < 0):
-        raise ValueError(f'{siteprob_file}: posterior rows do not map bijectively to the alignment')
+        raise ValueError(f'{sitelh_file}: posterior rows do not map bijectively to the alignment')
 
     scaled_mean_rates = np.sum(posterior_weights * category_rates, axis=1)
     normalization_constant = float(scaled_mean_rates.mean())
@@ -874,14 +909,17 @@ def load_iqtree_site_rate_posteriors(
         if np.any(raw_rate_means == 100.0):
             raise ValueError(
                 f'{rate_file}: IQ-TREE censors posterior mean rates at 100; '
-                'an exact .rate/.siteprob cross-check is impossible. Omit the '
+                'an exact .rate/.sitelh cross-check is impossible. Omit the '
                 'optional .rate cross-check or supply uncensored rates.'
             )
         posterior_raw_means = mean_rates * normalization_constant / partition_speeds[partition_index]
+        # -wslr reconstructs the responsibilities from ~4-decimal log-likelihoods,
+        # so the posterior mean rate can differ from IQ-TREE's own .rate row by
+        # ~1e-4; loosen atol from the .siteprob-era 2e-5 accordingly.
         if not np.allclose(
             raw_rate_means,
             posterior_raw_means,
-            atol=2e-5,
+            atol=2e-4,
             rtol=2e-4,
         ):
             difference = np.abs(raw_rate_means - posterior_raw_means)
@@ -889,13 +927,13 @@ def load_iqtree_site_rate_posteriors(
             raise ValueError(f'{rate_file}: posterior mean cross-check failed at alignment site {coordinate + 1}')
 
     metadata = {
-        'source': 'IQ-TREE .siteprob',
-        'siteprob_file': str(Path(siteprob_file)),
+        'source': 'IQ-TREE .sitelh',
+        'sitelh_file': str(Path(sitelh_file)),
         'rate_file': str(Path(rate_file)) if rate_file is not None else None,
         'partition_file': str(Path(partition_file)) if partition_file is not None else None,
         'report_file': str(Path(report_file)),
         'partition_model': partition_mode,
-        'siteprob_mode': 'rate-category (single-matrix IQ-TREE model)',
+        'sitelh_mode': 'rate-category (single-matrix IQ-TREE model)',
         'category_counts': category_counts,
         'normalization_constant': normalization_constant,
         'renormalized_posterior_rows': renormalized_posterior_rows,
