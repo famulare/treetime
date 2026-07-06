@@ -67,6 +67,135 @@ Other output files include an alignment with reconstructed ancestral sequences, 
 In addition, the root-to-tip vs time regression and the tree are drawn and saved to file.
 
 
+Dating with IQ-TREE site-rate estimates
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+TreeTime can use relative site-rate estimates from an IQ-TREE analysis of the
+same alignment and fixed topology. This is opt-in: ordinary TreeTime behavior
+is unchanged when ``--site-rates`` and the other site-rate options are absent.
+
+For an unpartitioned nucleotide alignment, first ask IQ-TREE 2 to optimize a
+FreeRate model on the fixed topology and write posterior-mean site rates and
+category responsibilities:
+
+.. code-block:: bash
+
+   iqtree2 -s alignment.fasta -te tree.nwk -m GTR+F+R4 \
+     --rate -wspr --prefix iqtree
+
+The faster posterior-mean mode uses the resulting ``iqtree.rate``:
+
+.. code-block:: bash
+
+   treetime --tree tree.nwk --dates dates.tsv --aln alignment.fasta \
+     --site-rates iqtree.rate --site-rate-mode mean --outdir dated-mean
+
+The frozen-responsibility mode additionally uses the FreeRate categories in
+the IQ-TREE report and the per-site category probabilities:
+
+.. code-block:: bash
+
+   treetime --tree tree.nwk --dates dates.tsv --aln alignment.fasta \
+     --site-rate-mode posterior-elbo \
+     --site-rate-posteriors iqtree.siteprob \
+     --site-rate-report iqtree.iqtree --outdir dated-elbo
+
+IQ-TREE uses the same generic ``.siteprob`` column names for ``-wspr``,
+``-wspm``, and ``-wspmr``, and its standard report does not record which option
+wrote the file. For a single-matrix substitution model, IQ-TREE always writes
+rate-category probabilities, so this output is unambiguous. TreeTime rejects
+substitution-mixture models because mixture-class probabilities could otherwise
+be mistaken for rate-category probabilities when the column counts match.
+
+``--site-rates iqtree.rate`` may be added to the second command as a strict
+posterior-mean cross-check. IQ-TREE caps some reported ``.rate`` values at 100;
+if that censoring occurs, omit this optional cross-check.
+
+For a partitioned alignment, use IQ-TREE's edge-linked proportional (``-p``)
+partition model. For example:
+
+.. code-block:: bash
+
+   iqtree2 -s alignment.fasta -te tree.nwk -p partitions.nex -m GTR+F+R4 \
+     --rate -wspr --prefix iqtree
+
+   treetime --tree tree.nwk --dates dates.tsv --aln alignment.fasta \
+     --site-rate-mode posterior-elbo \
+     --site-rate-posteriors iqtree.siteprob \
+     --site-rate-report iqtree.iqtree \
+     --site-rate-model iqtree.best_model.nex --outdir dated-elbo
+
+The ``best_model.nex`` file supplies the partition-to-alignment coordinate map
+and category models; the ``.iqtree`` report supplies relative partition
+speeds. TreeTime maps partition-local rows back to the original global
+alignment coordinate, applies partition speeds, and then performs one global
+mean-one normalization. Never reorder, trim, translate, or otherwise change
+the alignment between the IQ-TREE and TreeTime commands.
+
+TreeTime can validate existing edge-linked-equal (``-q``) output, whose
+reported partition speeds are one. IQ-TREE 2.4.0 itself aborts optimization of
+``-q`` FreeRate models, however, so ``-q`` is not a current end-to-end
+FreeRate workflow.
+
+.. list-table:: Required IQ-TREE files
+   :header-rows: 1
+
+   * - Mode
+     - Unpartitioned
+     - Partitioned
+   * - ``mean``
+     - ``.rate``
+     - ``.rate``, ``.iqtree``, ``.best_model.nex``
+   * - ``posterior-elbo``
+     - ``.siteprob``, ``.iqtree``
+     - ``.siteprob``, ``.iqtree``, ``.best_model.nex``
+
+In ``mean`` mode, site ``i`` is evaluated at its posterior-mean relative rate
+``r_i``. In ``posterior-elbo`` mode, TreeTime evaluates the date-dependent
+branch term ``sum_i sum_k p_ik log P_i(t * r_ik)``. The IQ-TREE
+responsibilities ``p_ik`` are frozen at the IQ-TREE guide tree; they are not
+re-estimated independently on every TreeTime branch. This is an empirical-Bayes
+variational handoff, not the exact whole-tree FreeRate likelihood. Exact
+FreeRate dating is outside TreeTime's intended performance scope.
+
+Any TreeTime date confidence intervals in this mode condition on the imported,
+fixed responsibilities. They omit responsibility adaptation and its
+score-variance curvature, so they are not calibrated FreeRate uncertainty
+intervals and can under-cover when the IQ-TREE guide scale differs from the
+dated tree. TreeTime prints this warning when ``--confidence`` is requested.
+
+Both modes automatically disable alignment-pattern compression and use
+marginal ancestral-state branch likelihoods. ``--branch-length-mode auto``
+therefore becomes ``marginal``; explicit ``joint`` and ``input`` modes are
+rejected. VCF/variable-site input, ``--sequence-length`` augmentation, codon
+models, edge-unlinked partitions, and ``+I+R`` posterior output are not
+supported. A full nucleotide or amino-acid alignment is required.
+
+Posterior ELBO evaluation costs approximately one transition calculation per
+FreeRate category and is normally several times slower than posterior-mean
+mode. TreeTime prints the estimated number of site-category branch-grid
+evaluations and warns for large jobs. A reproducible microbenchmark is
+available as ``uv run python test/benchmark_site_rate_model.py``.
+
+Every site-rate run writes ``site_rate_model.tsv`` and
+``site_rate_model.json``. These files record the global site, source partition
+and local coordinate, partition speed, final posterior-mean rate, input paths,
+normalization, category counts, and validation tolerances. They should be kept
+with the dated tree as scientific provenance.
+
+The in-memory API exposes ``treetime.SiteRateModel``,
+``treetime.load_iqtree_site_rates``, and
+``treetime.load_iqtree_site_rate_posteriors``. Site-rate arrays are
+immutable and always indexed by the original uncompressed alignment
+coordinate. When constructing ``TreeTime`` directly, provide the derived
+site-specific and scalar GTR objects and call ``run(infer_gtr=False)``;
+TreeTime rejects substitution-model inference after a site-rate model is
+attached.
+
+See the `IQ-TREE documentation <http://www.iqtree.org/doc/>`_ and cite IQ-TREE
+for the upstream model fit and site-rate estimates.
+
+
 .. image:: figures/timetree.png
    :target: figures/timetree.png
    :alt: rtt
@@ -184,6 +313,3 @@ The following example with a set of MtB sequences uses a fixed evolutionary rate
 
 For many bacterial data sets where the temporal signal in the data is weak, it is advisable to fix the rate of the molecular clock explicitly.
 Divergence times, however, will depend on this choice.
-
-
-
