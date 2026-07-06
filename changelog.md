@@ -1,5 +1,6 @@
 # Unreleased
 
+- fix greedy and stochastic polytomy resolution treating a site-specific GTR rate vector as a scalar mutation rate.
 - reject pattern-compressed likelihoods for site-specific GTR models instead of silently using alignment-wide compression.
 - clamp negative floating-point roundoff in site-specific GTR transition matrices, matching the scalar GTR convention.
 - preserve explicitly supplied custom GTR models instead of re-inferring them when `--gtr infer` is also present.

@@ -35,6 +35,8 @@ class ClockTree(TreeAnc):
         branch_length_mode='joint',
         use_covariation=False,
         use_fft=True,
+        site_rate_model=None,
+        site_rate_base_gtr=None,
         **kwargs,
     ):
         """
@@ -82,7 +84,7 @@ class ClockTree(TreeAnc):
             Use FFT for calculation of convolution integrals if true (default).
             The alternative is kept to be able to reproduce previous behavior.
 
-         **kwargs:
+         kwargs
             Key word arguments passed on to the parent class (TreeAnc)
 
         """
@@ -99,7 +101,63 @@ class ClockTree(TreeAnc):
         # to terminal branches in covariance calculation
         self.rel_tol_prune = ttconf.REL_TOL_PRUNE
         self.rel_tol_refine = ttconf.REL_TOL_REFINE
-        self.branch_length_mode = branch_length_mode
+        self.site_rate_model = site_rate_model
+        self.site_rate_base_gtr = site_rate_base_gtr
+        self.branch_length_mode = (
+            'marginal' if self.site_rate_model is not None and branch_length_mode == 'auto' else branch_length_mode
+        )
+        if self.site_rate_model is not None:
+            if branch_length_mode not in {'auto', 'marginal'}:
+                raise ValueError('site-rate models require branch_length_mode="marginal"')
+            if self.site_rate_model.sequence_length != self.data.full_length:
+                raise ValueError('site-rate model length does not match the uncompressed alignment length')
+            if not self.gtr.is_site_specific:
+                raise ValueError('site-rate models require a site-specific ancestral GTR')
+            positive_rates = self.site_rate_model.mean_rates > 0
+            if np.any(~positive_rates & (self.gtr.mu != 0)):
+                raise ValueError('site-specific ancestral GTR rates do not match the site-rate model')
+            if np.any(positive_rates):
+                relative_mu = self.gtr.mu[positive_rates] / self.site_rate_model.mean_rates[positive_rates]
+                if not np.allclose(
+                    relative_mu,
+                    relative_mu[0],
+                    atol=1e-10,
+                    rtol=1e-10,
+                ):
+                    raise ValueError('site-specific ancestral GTR rates do not match the site-rate model')
+            if self.site_rate_base_gtr is None:
+                raise ValueError('site-rate models require a scalar base GTR')
+            if self.site_rate_base_gtr.is_site_specific:
+                raise ValueError('site_rate_base_gtr must be scalar')
+            if not np.array_equal(self.gtr.alphabet, self.site_rate_base_gtr.alphabet):
+                raise ValueError('site-rate GTR alphabets do not match')
+            if not np.allclose(
+                self.gtr.Pi,
+                self.site_rate_base_gtr.Pi[:, None],
+                atol=1e-10,
+                rtol=1e-10,
+            ):
+                raise ValueError('site-specific and scalar GTR equilibrium frequencies do not match')
+            if not np.isclose(
+                self.site_rate_base_gtr.average_rate(),
+                1.0,
+                atol=1e-10,
+                rtol=1e-10,
+            ):
+                raise ValueError('site_rate_base_gtr must have unit mean rate')
+            site_generator_scales = np.einsum('a,ij->aij', self.gtr.mu, self.gtr.W)
+            expected_generator_scales = np.einsum(
+                'a,ij->aij',
+                self.site_rate_model.mean_rates * self.site_rate_base_gtr.mu,
+                self.site_rate_base_gtr.W,
+            )
+            if not np.allclose(
+                site_generator_scales,
+                expected_generator_scales,
+                atol=1e-10,
+                rtol=1e-10,
+            ):
+                raise ValueError('site-specific and scalar GTR generators do not match')
         self.clock_model = None
         self.use_covariation = use_covariation  # if false, covariation will be ignored in rate estimates.
         self._set_precision(precision)
@@ -365,6 +423,8 @@ class ClockTree(TreeAnc):
                     one_mutation=self.one_mutation,
                     branch_length_mode=self.branch_length_mode,
                     n_grid_points=self.branch_grid_points,
+                    site_rate_model=self.site_rate_model,
+                    site_rate_base_gtr=self.site_rate_base_gtr,
                 )
 
                 node.branch_length_interpolator.gamma = gamma

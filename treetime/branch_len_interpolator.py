@@ -20,9 +20,13 @@ class BranchLenInterpolator(Distribution):
         pattern_multiplicity=None,
         n_grid_points=ttconf.BRANCH_GRID_SIZE,
         ignore_gaps=True,
+        site_rate_model=None,
+        site_rate_base_gtr=None,
     ):
         self.node = node
         self.gtr = gtr
+        self.site_rate_model = site_rate_model
+        self.site_rate_base_gtr = site_rate_base_gtr
         if node.up is None:
             raise Exception('Cannot create branch length interpolator for the root node.')
 
@@ -102,12 +106,34 @@ class BranchLenInterpolator(Distribution):
                 )
         elif branch_length_mode == 'marginal':
             if hasattr(node, 'profile_pair'):
-                log_prob = np.array(
-                    [
-                        -self.gtr.prob_t_profiles(node.profile_pair, pattern_multiplicity, k, return_log=True)
-                        for k in grid
-                    ]
-                )
+                if self.site_rate_model is not None and self.site_rate_model.evaluation_mode == 'posterior-elbo':
+                    if self.site_rate_base_gtr is None:
+                        raise ValueError('posterior-elbo site-rate evaluation requires a scalar base GTR')
+                    log_prob = np.array(
+                        [
+                            -self.site_rate_model.prob_t_profiles_elbo(
+                                self.site_rate_base_gtr,
+                                node.profile_pair,
+                                pattern_multiplicity,
+                                k,
+                                return_log=True,
+                                ignore_gaps=ignore_gaps,
+                            )
+                            for k in grid
+                        ]
+                    )
+                else:
+                    log_prob = np.array(
+                        [
+                            -self.gtr.prob_t_profiles(
+                                node.profile_pair,
+                                pattern_multiplicity,
+                                k,
+                                return_log=True,
+                            )
+                            for k in grid
+                        ]
+                    )
             else:
                 raise Exception('profile pairs need to be assigned to node')
 

@@ -129,6 +129,144 @@ def test_toplevel_cli_propagates_success_and_reports_missing_inputs(monkeypatch,
     assert valid.func(valid) == 7
 
 
+# GTR captured from pre-refactor `master` infer_gtr on the fixture below (numpy 2.5.0).
+# Proves the optional site_rate_weights refactor reproduces master's inference for the
+# unweighted path. rtol accommodates cross-platform BLAS in the eigendecomposition.
+_MASTER_UNWEIGHTED_GTR_GOLDEN = {
+    False: {
+        'mu': 1.0000000000000007,
+        'Pi': [0.2502723163528559, 0.26865883203377944, 0.23447694169224087, 0.23447694169224087, 0.012114968228883045],
+        'W': [
+            [0.0, 1.375561021007432, 1.2696787634975544, 1.2696787634975544, 1.2713777824842694],
+            [1.375561021007432, 0.0, 1.3858962314067746, 1.3858962314067746, 1.262119440667105],
+            [1.2696787634975544, 1.3858962314067746, 0.0, 1.2771192170104886, 1.2784111704610566],
+            [1.2696787634975544, 1.3858962314067746, 1.2771192170104886, 0.0, 1.2784111704610566],
+            [1.2713777824842694, 1.262119440667105, 1.2784111704610566, 1.2784111704610566, 0.0],
+        ],
+    },
+    True: {
+        'mu': 0.9999999999999999,
+        'Pi': [0.24737878512904185, 0.2751698302610791, 0.2312895302314521, 0.23404992748961032, 0.012111926888816658],
+        'W': [
+            [0.0, 1.3350431388766457, 1.3515239726582715, 1.2705840639416728, 1.2723305922898558],
+            [1.3350431388766457, 0.0, 1.3451326185800545, 1.393659710923357, 1.2667938761507975],
+            [1.3515239726582715, 1.3451326185800545, 0.0, 1.2780136605361254, 1.2793501056297625],
+            [1.2705840639416728, 1.393659710923357, 1.2780136605361254, 0.0, 1.2793872927818202],
+            [1.2723305922898558, 1.2667938761507975, 1.2793501056297625, 1.2793872927818202, 0.0],
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize('marginal', [False, True])
+def test_unweighted_gtr_inference_matches_explicit_unit_weights(marginal):
+    def analysis():
+        tree = Phylo.read(StringIO('(a:0.1,b:0.1,c:0.1);'), 'newick')
+        alignment = MultipleSeqAlignment(
+            [
+                SeqRecord(Seq('AACC'), id='a'),
+                SeqRecord(Seq('ACCC'), id='b'),
+                SeqRecord(Seq('AGCT'), id='c'),
+            ]
+        )
+        result = TreeAnc(
+            tree=tree,
+            aln=alignment,
+            gtr=GTR.standard('JC69', alphabet='nuc'),
+            compress=False,
+            verbose=0,
+            rng_seed=3,
+        )
+        result.infer_ancestral_sequences('probabilistic', marginal=marginal)
+        return result
+
+    legacy = analysis().infer_gtr(marginal=marginal)
+    weighted = analysis().infer_gtr(marginal=marginal, site_rate_weights=np.ones(4))
+
+    # The default (weights-absent) path is byte-identical to explicit unit weights:
+    # multiplying exposure by 1.0 is IEEE-exact.
+    assert legacy.mu == weighted.mu
+    np.testing.assert_array_equal(legacy.Pi, weighted.Pi)
+    np.testing.assert_array_equal(legacy.W, weighted.W)
+    assert str(legacy) == str(weighted)
+
+    # The refactored inference reproduces pre-refactor `master` (regression golden).
+    golden = _MASTER_UNWEIGHTED_GTR_GOLDEN[marginal]
+    np.testing.assert_allclose(legacy.mu, golden['mu'], rtol=1e-8, atol=1e-10)
+    np.testing.assert_allclose(legacy.Pi, golden['Pi'], rtol=1e-8, atol=1e-10)
+    np.testing.assert_allclose(legacy.W, golden['W'], rtol=1e-8, atol=1e-10)
+
+
+def test_shared_gtr_inference_weights_exposure_by_known_site_rate(monkeypatch):
+    tree = Phylo.read(StringIO('(a:0.1,b:0.1,c:0.1);'), 'newick')
+    alignment = MultipleSeqAlignment(
+        [
+            SeqRecord(Seq('AACC'), id='a'),
+            SeqRecord(Seq('AACC'), id='b'),
+            SeqRecord(Seq('AACC'), id='c'),
+        ]
+    )
+    tree_anc = TreeAnc(
+        tree=tree,
+        aln=alignment,
+        gtr=GTR.standard('JC69', alphabet='nuc'),
+        compress=False,
+        verbose=0,
+    )
+    tree_anc.infer_ancestral_sequences('probabilistic', marginal=False)
+    captured = {}
+    original_infer = GTR.infer.__func__
+
+    def capture_exposure(cls, nij, Ti, root_state, **kwargs):
+        captured['exposure'] = Ti.copy()
+        return original_infer(cls, nij, Ti, root_state, **kwargs)
+
+    monkeypatch.setattr(GTR, 'infer', classmethod(capture_exposure))
+    tree_anc.infer_gtr(
+        marginal=False,
+        site_rate_weights=np.array([0.5, 0.5, 1.5, 1.5]),
+    )
+
+    exposure = captured['exposure']
+    assert exposure[tree_anc.gtr.state_index['C']] == pytest.approx(3 * exposure[tree_anc.gtr.state_index['A']])
+
+
+def test_weighted_joint_gtr_inference_scales_mutation_midpoint_exposure(monkeypatch):
+    tree = Phylo.read(StringIO('(a:0.1,b:0.1,c:0.1);'), 'newick')
+    alignment = MultipleSeqAlignment(
+        [
+            SeqRecord(Seq('A'), id='a'),
+            SeqRecord(Seq('A'), id='b'),
+            SeqRecord(Seq('C'), id='c'),
+        ]
+    )
+    tree_anc = TreeAnc(
+        tree=tree,
+        aln=alignment,
+        gtr=GTR.standard('JC69', alphabet='nuc'),
+        compress=False,
+        verbose=0,
+    )
+    tree_anc.infer_ancestral_sequences('probabilistic', marginal=False)
+    captured = {}
+    original_infer = GTR.infer.__func__
+
+    def capture_exposure(cls, nij, Ti, root_state, **kwargs):
+        captured['exposure'] = Ti.copy()
+        return original_infer(cls, nij, Ti, root_state, **kwargs)
+
+    monkeypatch.setattr(GTR, 'infer', classmethod(capture_exposure))
+    tree_anc.infer_gtr(
+        marginal=False,
+        site_rate_weights=np.array([0.25]),
+    )
+
+    exposure = captured['exposure']
+    assert exposure[tree_anc.gtr.state_index['A']] == pytest.approx(0.0625)
+    assert exposure[tree_anc.gtr.state_index['C']] == pytest.approx(0.0125)
+    assert np.all(exposure >= 0)
+
+
 def test_posterior_model_validation_and_immutability():
     model = SiteRateModel(
         mean_rates=[0.5, 1.5],
@@ -767,6 +905,225 @@ def test_site_specific_large_rate_transition_matches_matrix_exponential():
     assert np.all(observed >= 0)
 
 
+def test_branch_interpolator_uses_elbo_without_node_model_state():
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    model = load_iqtree_site_rate_posteriors(
+        DATA / 'unpartitioned.siteprob',
+        report_file=DATA / 'unpartitioned.iqtree',
+    )
+    tier_a_gtr, scalar_gtr = build_site_rate_gtrs(model, base_gtr)
+    profiles = _one_hot_profiles(base_gtr, [0, 0, 0], [0, 1, 0])
+    node = SimpleNamespace(
+        up=object(),
+        mutation_length=0.1,
+        profile_pair=profiles,
+    )
+
+    interpolator = BranchLenInterpolator(
+        node,
+        tier_a_gtr,
+        one_mutation=1 / 3,
+        branch_length_mode='marginal',
+        pattern_multiplicity=np.ones(3),
+        n_grid_points=20,
+        site_rate_model=model,
+        site_rate_base_gtr=scalar_gtr,
+    )
+    expected = np.asarray(
+        [
+            -model.prob_t_profiles_elbo(scalar_gtr, profiles, np.ones(3), value, return_log=True)
+            for value in interpolator.x
+        ]
+    )
+
+    np.testing.assert_allclose(interpolator.y, expected)
+    assert not hasattr(node, 'site_rate_model')
+    assert not hasattr(node, 'site_rate_posteriors')
+
+
+def _tiny_treetime_inputs():
+    from io import StringIO
+
+    tree = Phylo.read(StringIO('((a:0.1,b:0.1):0.1,c:0.2);'), 'newick')
+    alignment = MultipleSeqAlignment(
+        [
+            SeqRecord(Seq('AA'), id='a'),
+            SeqRecord(Seq('AC'), id='b'),
+            SeqRecord(Seq('CC'), id='c'),
+        ]
+    )
+    return tree, alignment, {'a': 2000.0, 'b': 2001.0, 'c': 2002.0}
+
+
+def test_treetime_owns_site_rate_model_and_forces_marginal_mode():
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    model = SiteRateModel(
+        mean_rates=[0.5, 1.5],
+        posterior_weights=[[1.0, 0.0], [0.0, 1.0]],
+        category_rates=[[0.5, 1.5], [0.5, 1.5]],
+        category_prior_weights=[[0.5, 0.5], [0.5, 0.5]],
+        category_mask=[[True, True], [True, True]],
+        partition_index=[0, 0],
+        partition_site=[1, 2],
+        partition_names=('alignment',),
+        partition_speeds=[1.0],
+        evaluation_mode='posterior-elbo',
+    )
+    tier_a_gtr, scalar_gtr = build_site_rate_gtrs(model, base_gtr)
+    tree, alignment, dates = _tiny_treetime_inputs()
+    tree_time = TreeTime(
+        tree=tree,
+        aln=alignment,
+        dates=dates,
+        gtr=tier_a_gtr,
+        compress=False,
+        branch_length_mode='marginal',
+        site_rate_model=model,
+        site_rate_base_gtr=scalar_gtr,
+    )
+
+    tree_time._set_branch_length_mode('auto')
+    assert tree_time.branch_length_mode == 'marginal'
+    assert tree_time.site_rate_model is model
+    assert all(not hasattr(node, 'site_rate_model') for node in tree_time.tree.find_clades())
+    with pytest.raises(UnknownMethodError, match='require'):
+        tree_time._set_branch_length_mode('joint')
+
+
+def test_treetime_builds_date_constraints_with_analysis_owned_elbo_model():
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    model = SiteRateModel(
+        mean_rates=[0.5, 1.5],
+        posterior_weights=[[1.0, 0.0], [0.0, 1.0]],
+        category_rates=[[0.5, 1.5], [0.5, 1.5]],
+        category_prior_weights=[[0.5, 0.5], [0.5, 0.5]],
+        category_mask=[[True, True], [True, True]],
+        partition_index=[0, 0],
+        partition_site=[1, 2],
+        partition_names=('alignment',),
+        partition_speeds=[1.0],
+        evaluation_mode='posterior-elbo',
+    )
+    tier_a_gtr, scalar_gtr = build_site_rate_gtrs(model, base_gtr)
+    tree, alignment, dates = _tiny_treetime_inputs()
+    tree_time = TreeTime(
+        tree=tree,
+        aln=alignment,
+        dates=dates,
+        gtr=tier_a_gtr,
+        compress=False,
+        branch_length_mode='marginal',
+        site_rate_model=model,
+        site_rate_base_gtr=scalar_gtr,
+        verbose=0,
+    )
+
+    tree_time._set_branch_length_mode('marginal')
+    tree_time.init_date_constraints(clock_rate=0.01)
+
+    assert all(
+        node.branch_length_interpolator.site_rate_model is model
+        for node in tree_time.tree.find_clades()
+        if node.up is not None
+    )
+
+
+def test_custom_gtr_scaling_is_compared_by_effective_generator():
+    pi = np.array([0.3, 0.2, 0.25, 0.2, 0.05])
+    exchangeability = np.array(
+        [
+            [0, 1, 2, 3, 0.5],
+            [1, 0, 4, 1.5, 0.7],
+            [2, 4, 0, 2.5, 0.9],
+            [3, 1.5, 2.5, 0, 1.1],
+            [0.5, 0.7, 0.9, 1.1, 0],
+        ],
+        dtype=float,
+    )
+    base_gtr = GTR.custom(
+        mu=2.5,
+        pi=pi,
+        W=exchangeability,
+        alphabet='nuc',
+    )
+    model = SiteRateModel(
+        mean_rates=[0.5, 1.5],
+        posterior_weights=[[1.0, 0.0], [0.0, 1.0]],
+        category_rates=[[0.5, 1.5], [0.5, 1.5]],
+        category_prior_weights=[[0.5, 0.5], [0.5, 0.5]],
+        category_mask=[[True, True], [True, True]],
+        partition_index=[0, 0],
+        partition_site=[1, 2],
+        partition_names=('alignment',),
+        partition_speeds=[1.0],
+        evaluation_mode='posterior-elbo',
+    )
+    tier_a_gtr, scalar_gtr = build_site_rate_gtrs(model, base_gtr)
+    tree, alignment, dates = _tiny_treetime_inputs()
+
+    tree_time = TreeTime(
+        tree=tree,
+        aln=alignment,
+        dates=dates,
+        gtr=tier_a_gtr,
+        compress=False,
+        branch_length_mode='marginal',
+        site_rate_model=model,
+        site_rate_base_gtr=scalar_gtr,
+    )
+
+    assert tree_time.site_rate_base_gtr is scalar_gtr
+
+
+def test_mean_mode_rejects_global_site_gtr_scaling_that_confounds_the_clock():
+    model = SiteRateModel(
+        mean_rates=[0.5, 1.5],
+        partition_index=[0, 0],
+        partition_site=[1, 2],
+        partition_names=('alignment',),
+        partition_speeds=[1.0],
+    )
+    site_gtr, scalar_gtr = build_site_rate_gtrs(model, GTR.standard('JC69', alphabet='nuc'))
+    site_gtr._mu *= 2
+    tree, alignment, dates = _tiny_treetime_inputs()
+
+    with pytest.raises(ValueError, match='generators do not match'):
+        TreeTime(
+            tree=tree,
+            aln=alignment,
+            dates=dates,
+            gtr=site_gtr,
+            compress=False,
+            branch_length_mode='marginal',
+            site_rate_model=model,
+            site_rate_base_gtr=scalar_gtr,
+        )
+
+
+def test_treetime_rejects_site_rate_length_mismatch():
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    model = SiteRateModel(
+        mean_rates=[1.0],
+        partition_index=[0],
+        partition_site=[1],
+        partition_names=('alignment',),
+        partition_speeds=[1.0],
+    )
+    tier_a_gtr, scalar_gtr = build_site_rate_gtrs(model, base_gtr)
+    tree, alignment, dates = _tiny_treetime_inputs()
+    with pytest.raises(ValueError, match='length'):
+        TreeTime(
+            tree=tree,
+            aln=alignment,
+            dates=dates,
+            gtr=tier_a_gtr,
+            compress=False,
+            branch_length_mode='marginal',
+            site_rate_model=model,
+            site_rate_base_gtr=scalar_gtr,
+        )
+
+
 def test_variational_identity_is_tight_at_guide_posterior():
     prior = np.array([0.4, 0.6])
     likelihood = np.array([0.2, 0.8])
@@ -889,6 +1246,43 @@ def test_elbo_gap_weighting_and_negative_length_match_tree_time_contract():
 
     assert observed == pytest.approx(expected, abs=1e-12)
     assert model.prob_t_profiles_elbo(base_gtr, profiles, [1.0, 1.0], -0.1, return_log=True) == -ttconf.BIG_NUMBER
+
+
+def test_polytomy_rate_uses_gap_excluding_scalar_normalization():
+    model = load_iqtree_site_rates(DATA / 'unpartitioned.rate')
+    alphabet = GTR.standard('JC69', alphabet='nuc').alphabet
+    exchangeability = np.ones((len(alphabet), len(alphabet)))
+    np.fill_diagonal(exchangeability, 0)
+    gap_index = int(np.flatnonzero(alphabet == '-')[0])
+    exchangeability[gap_index, :] = 100
+    exchangeability[:, gap_index] = 100
+    exchangeability[gap_index, gap_index] = 0
+    base_gtr = GTR.custom(
+        mu=1.0,
+        pi=[0.24, 0.24, 0.24, 0.24, 0.04],
+        W=exchangeability,
+        alphabet=alphabet,
+    )
+    site_gtr, scalar_gtr = build_site_rate_gtrs(model, base_gtr)
+    tree_time = TreeTime.__new__(TreeTime)
+    tree_time.site_rate_model = model
+    tree_time.site_rate_base_gtr = scalar_gtr
+    tree_time._gtr = site_gtr
+    tree_time.data = SimpleNamespace(full_length=model.sequence_length)
+
+    assert not np.isclose(site_gtr.mu.sum(), model.sequence_length)
+    assert tree_time._alignment_mutation_rate() == pytest.approx(model.sequence_length)
+
+
+def test_polytomy_rate_matches_legacy_scalar_expression_exactly():
+    tree_time = TreeTime.__new__(TreeTime)
+    tree_time.site_rate_model = None
+    tree_time._gtr = SimpleNamespace(mu=np.float64(0.125))
+    tree_time.data = SimpleNamespace(full_length=37)
+
+    expected = tree_time.gtr.mu * tree_time.data.full_length
+
+    assert tree_time._alignment_mutation_rate() == expected
 
 
 @pytest.mark.parametrize(
