@@ -1,0 +1,12 @@
+# Site likelihood per rate/mixture category
+# Hand-built synthetic -wslr .sitelh (GTR+F+R2) exercising real IQ-TREE quirks:
+#   site 1: clean row, q reconstructs to [0.5, 0.5] and already sums to one
+#   site 2: -inf LnLW (log of a zero-probability category) -> q_1 = 0
+#   site 3: under-summing row (sum_k q_k = 0.86) -> renormalized among categories
+#   site 4: -inf plus under-sum (sum = 0.9) -> q = [0, 1] after renormalization
+# LnL is 0 so exp(LnLW_k - LnL) = exp(LnLW_k) reconstructs each q_k directly.
+Site	LnL	LnLW_1	LnLW_2
+1	0.000000	-0.693147	-0.693147
+2	0.000000	-inf	0.000000
+3	0.000000	-0.916291	-0.776529
+4	0.000000	-inf	-0.105361

@@ -1,0 +1,19 @@
+IQ-TREE 2.4.0
+
+SEQUENCE ALIGNMENT
+------------------
+
+Input data: 4 sequences with 2 nucleotide sites
+
+SUBSTITUTION PROCESS
+--------------------
+
+Model of substitution: GTR+F+I+R2
+
+Model of rate heterogeneity: Invar+FreeRate with 2 categories
+Proportion of invariable sites: 0.3
+
+ Category  Relative_rate  Proportion
+  0         0              0.3
+  1         0.5            0.35
+  2         1.5            0.35

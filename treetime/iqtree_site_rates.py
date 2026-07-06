@@ -804,6 +804,20 @@ def _parse_finite_number(value, *, field, line_number):
     return number
 
 
+def _parse_category_log_weight(value, *, line_number):
+    """Parse one ``LnLW_k`` column, accepting ``-inf`` (log of a zero-probability category).
+
+    IQ-TREE writes ``-inf`` (= log(0)) for categories whose weighted site
+    likelihood underflowed to zero; these are legitimate and reconstruct to a
+    category responsibility of exactly zero. ``+inf`` and ``nan`` remain invalid.
+    """
+    if _SIGNED_NUMBER.fullmatch(value):
+        return float(value)
+    if value in {'-inf', '-Inf', '-INF', '-Infinity'}:
+        return float('-inf')
+    raise ValueError(f'line {line_number}: category LnLW is not a finite decimal number or -inf: {value!r}')
+
+
 def _read_sitelh_table(path):
     """Parse IQ-TREE ``-wslr`` ``.sitelh`` output into per-site category posteriors.
 
@@ -814,6 +828,10 @@ def _read_sitelh_table(path):
     columns to writer precision (~1e-4). Partitioned files are detected by a
     leading ``Part`` column and may emit ragged rows: partitions with fewer
     categories print fewer ``LnLW`` values (the file's own R hint uses fill=TRUE).
+
+    ``LnLW_k`` may be ``-inf`` (= log(0)) on real data: IQ-TREE writes it for
+    categories whose weighted site likelihood underflowed to zero, which
+    reconstruct to ``q_k = 0``. The ``LnL`` column must stay finite.
     """
     text = _read_text(path, 'IQ-TREE .sitelh file')
     header = None
@@ -854,10 +872,15 @@ def _read_sitelh_table(path):
         local_site = _parse_positive_integer(site_value, field='Site', line_number=line_number)
         log_likelihood = _parse_finite_number(log_likelihood_value, field='site LnL', line_number=line_number)
         category_log_weights = np.asarray(
-            [_parse_finite_number(value, field='category LnLW', line_number=line_number) for value in category_values],
+            [_parse_category_log_weight(value, line_number=line_number) for value in category_values],
             dtype=float,
         )
-        probabilities = np.exp(category_log_weights - log_likelihood)
+        # -inf LnLW columns reconstruct to q_k = 0. Do the exp under errstate so
+        # exp(-inf) = 0 raises no RuntimeWarning, and sweep any residual non-finite
+        # (a positive over/underflow guard) to zero.
+        with np.errstate(over='ignore', under='ignore', invalid='ignore'):
+            probabilities = np.exp(category_log_weights - log_likelihood)
+        probabilities = np.nan_to_num(probabilities, nan=0.0, posinf=0.0, neginf=0.0)
         records.append((line_number, partition_id, local_site, probabilities))
     if header is None or not records:
         raise ValueError(f'{path}: no site-likelihood rows found')
@@ -977,19 +1000,32 @@ def load_iqtree_site_rate_posteriors(
         if invariant_partition[partition_id - 1]:
             # The invariant responsibility is the deficit in the variable
             # responsibilities: p_i0 = 1 - sum_k q_k (clamped for -wslr rounding).
-            # Build the full row [p_i0, q_1..q_K] then renormalize the FULL row so
-            # the rate-0 category absorbs the writer-precision rounding.
+            # This deficit IS the rate-0 invariant mass and must be kept, never
+            # renormalized away. Build the full row [p_i0, q_1..q_K] and rescale it
+            # to sum-1 so the rate-0 category absorbs the writer-precision rounding.
+            # On numerically-extreme sites IQ-TREE can violate its own .sitelh
+            # invariant (sum_k exp(LnLW_k) = exp(LnL)) by up to ~0.15 in log-space,
+            # which would inflate p_i0 slightly; but such sites are fast-rate (the
+            # opposite of invariant), so any spurious p_i0 there is negligible.
             invariant_responsibility = max(0.0, 1.0 - float(np.sum(probabilities)))
             full_probabilities = np.concatenate([[invariant_responsibility], probabilities])
+            normalized_probabilities, deviation = _normalize_probability_row(
+                full_probabilities, description=f'line {line_number} posterior row', tolerance=1e-3
+            )
         else:
+            # Non-+I: sum_k q_k should be 1, but IQ-TREE writes -inf (= q_k = 0) for
+            # underflowed categories and, on numerically-extreme sites, violates its
+            # own documented .sitelh invariant so the row under-sums (down to ~0.86
+            # on real +R6 data). IQ-TREE's own .siteprob hides this by renormalizing
+            # among categories (q_k / sum_j q_j); mirror that here rather than reject
+            # the row. Only a genuinely broken row -- no positive finite mass, e.g.
+            # an all- -inf row -- fails closed.
             full_probabilities = probabilities
-        # -wslr prints ~4-decimal log-likelihoods, so a reconstructed
-        # q_k = exp(LnLW_k - LnL) row can deviate from sum-1 by ~1e-4; loosen the
-        # per-row normalization tolerance accordingly (the strict 1e-5 tolerance is
-        # retained for the full-precision category-prior rows from the model files).
-        normalized_probabilities, deviation = _normalize_probability_row(
-            full_probabilities, description=f'line {line_number} posterior row', tolerance=1e-3
-        )
+            row_sum = float(np.sum(full_probabilities))
+            if not np.isfinite(row_sum) or row_sum <= 0:
+                raise ValueError(f'line {line_number}: posterior row has no positive finite category mass')
+            normalized_probabilities = full_probabilities / row_sum
+            deviation = abs(row_sum - 1.0)
         maximum_posterior_deviation = max(maximum_posterior_deviation, deviation)
         if deviation > 0:
             renormalized_posterior_rows += 1

@@ -1,0 +1,271 @@
+IQ-TREE 2.4.0 built Mar  8 2025
+
+Input file name: sim80_31.phy
+User tree file name: tree80.nwk
+Type of analysis: tree reconstruction
+Random seed number: 1
+
+REFERENCES
+----------
+
+To cite IQ-TREE please use:
+
+Bui Quang Minh, Heiko A. Schmidt, Olga Chernomor, Dominik Schrempf,
+Michael D. Woodhams, Arndt von Haeseler, and Robert Lanfear (2020)
+IQ-TREE 2: New models and efficient methods for phylogenetic inference
+in the genomic era. Mol. Biol. Evol., in press.
+https://doi.org/10.1093/molbev/msaa015
+
+SEQUENCE ALIGNMENT
+------------------
+
+Input data: 80 sequences with 40 nucleotide sites
+Number of constant sites: 1770 (= 59% of all sites)
+Number of invariant (constant or ambiguous constant) sites: 1770 (= 59% of all sites)
+Number of parsimony informative sites: 1123
+Number of distinct site patterns: 1215
+
+SUBSTITUTION PROCESS
+--------------------
+
+Model of substitution: GTR+FU+R6
+
+Rate parameter R:
+
+  A-C: 2.0000
+  A-G: 4.0000
+  A-T: 1.0000
+  C-G: 1.5000
+  C-T: 3.0000
+  G-T: 1.0000
+
+State frequencies: (user-defined)
+
+  pi(A) = 0.3
+  pi(C) = 0.2
+  pi(G) = 0.2
+  pi(T) = 0.3
+
+Rate matrix Q:
+
+  A        -1    0.2667    0.5333       0.2
+  C       0.4      -1.2       0.2       0.6
+  G       0.8       0.2      -1.2       0.2
+  T       0.2       0.4    0.1333   -0.7333
+
+Model of rate heterogeneity: FreeRate with 6 categories
+Site proportion and rates:  (0.5,1.671e-07) (0.2,0.008354) (0.15,0.08354) (0.1,0.5013) (0.04,2.506) (0.01,83.54)
+
+ Category  Relative_rate  Proportion
+  1         1.671e-07      0.5
+  2         0.008354       0.2
+  3         0.08354        0.15
+  4         0.5013         0.1
+  5         2.506          0.04
+  6         83.54          0.01
+
+USER TREE
+---------
+
+Log-likelihood of the tree: -66513.2260 (s.e. 1848.6592)
+Unconstrained log-likelihood (without tree): -13168.9758
+Number of free parameters (#branches + #model parameters): 157
+Akaike information criterion (AIC) score: 133340.4520
+Corrected Akaike information criterion (AICc) score: 133357.9087
+Bayesian information criterion (BIC) score: 134283.4517
+
+Total tree length (sum of branch lengths): 18.6819
+Sum of internal branch lengths: 9.7981 (52.4471% of tree length)
+
+WARNING: 2 near-zero internal branches (<0.0003) should be treated with caution
+         Such branches are denoted by '**' in the figure below
+
+NOTE: Tree is UNROOTED although outgroup taxon 'T2' is drawn at root
+
++---T2
+|
++--T61
+|
+|                +---------T23
+|          +-----|
+|          |     +-----T45
++----------|
+           |                +--T5
+           |             +--|
+           |             |  +--T64
+           |          +--|
+           |          |  +--T56
+           |       +--|
+           |       |  |        +--T11
+           |       |  |     +--|
+           |       |  |     |  +---T75
+           |       |  |  +--|
+           |       |  |  |  +--T62
+           |       |  +--|
+           |       |     +**T19
+           |  +----|
+           |  |    |  +---T10
+           |  |    +--|
+           |  |       |  +--T13
+           |  |       +--|
+           |  |          +--T73
+           +--|
+              |                +--T4
+              |             +--|
+              |             |  |  +--T35
+              |             |  +--|
+              |             |     +--T78
+              |          +--|
+              |          |  +--T33
+              |       +--|
+              |       |  +--T32
+              |    +--|
+              |    |  |                 +--T6
+              |    |  |              +--|
+              |    |  |              |  +--T57
+              |    |  |           +--|
+              |    |  |           |  +--T47
+              |    |  |        +--|
+              |    |  |        |  +---T26
+              |    |  |     +--|
+              |    |  |     |  +--T17
+              |    |  |  +--|
+              |    |  |  |  |      +---T14
+              |    |  |  |  |  +---|
+              |    |  |  |  |  |   +--T54
+              |    |  |  |  +--|
+              |    |  |  |     |    +--T38
+              |    |  |  |     +----|
+              |    |  |  |          +-------T51
+              |    |  +--|
+              |    |     |      +---T7
+              |    |     |  +---|
+              |    |     |  |   |       +--T16
+              |    |     |  |   |    +--|
+              |    |     |  |   |    |  |  +---T72
+              |    |     |  |   |    |  +--|
+              |    |     |  |   |    |     +------T77
+              |    |     |  |   +----|
+              |    |     |  |        |       +--T25
+              |    |     |  |        +-------|
+              |    |     |  |                +----T31
+              |    |     +--|
+              |    |        |              +--T8
+              |    |        |           +--|
+              |    |        |           |  |  +----T53
+              |    |        |           |  +--|
+              |    |        |           |     +--T68
+              |    |        |        +--|
+              |    |        |        |  +--T29
+              |    |        |     +--|
+              |    |        |     |  |                   +--T22
+              |    |        |     |  |                +--|
+              |    |        |     |  |                |  +--T67
+              |    |        |     |  |             +--|
+              |    |        |     |  |             |  |  +---T43
+              |    |        |     |  |             |  +**|
+              |    |        |     |  |             |     |         +---T52
+              |    |        |     |  |             |     +---------|
+              |    |        |     |  |             |               |  +--T70
+              |    |        |     |  |             |               +--|
+              |    |        |     |  |             |                  +--T76
+              |    |        |     |  |          +--|
+              |    |        |     |  |          |  |     +---T37
+              |    |        |     |  |          |  |  +--|
+              |    |        |     |  |          |  |  |  |  +--T69
+              |    |        |     |  |          |  |  |  +**|
+              |    |        |     |  |          |  |  |     +--T74
+              |    |        |     |  |          |  +--|
+              |    |        |     |  |          |     +--T60
+              |    |        |     |  |       +--|
+              |    |        |     |  |       |  +--T34
+              |    |        |     |  +-------|
+              |    |        |     |          |  +-------T30
+              |    |        |     |          +--|
+              |    |        |     |             |  +--T46
+              |    |        |     |             +--|
+              |    |        |     |                +--T71
+              |    |        |  +--|
+              |    |        |  |  |  +--T20
+              |    |        |  |  +--|
+              |    |        |  |     |     +--T24
+              |    |        |  |     |  +--|
+              |    |        |  |     |  |  +---T63
+              |    |        |  |     +--|
+              |    |        |  |        +--T48
+              |    |        +--|
+              |    |           |         +--T12
+              |    |           |     +---|
+              |    |           |     |   +--T80
+              |    |           |  +--|
+              |    |           |  |  |        +-----T40
+              |    |           |  |  |     +--|
+              |    |           |  |  |     |  +--T79
+              |    |           |  |  +-----|
+              |    |           |  |        +--T41
+              |    |           +--|
+              |    |              +--T36
+              +----|
+                   |                +--T3
+                   |             +--|
+                   |             |  |   +--T18
+                   |             |  +---|
+                   |             |      +------T58
+                   |          +--|
+                   |          |  |              +--T15
+                   |          |  |           +--|
+                   |          |  |           |  +--T65
+                   |          |  |        +--|
+                   |          |  |        |  +--T59
+                   |          |  |  +-----|
+                   |          |  |  |     +---------T50
+                   |          |  +--|
+                   |          |     +--T44
+                   |     +----|
+                   |     |    |     +--T9
+                   |     |    |  +--|
+                   |     |    |  |  |     +--T42
+                   |     |    |  |  +-----|
+                   |     |    |  |        +--T66
+                   |     |    +--|
+                   |     |       |              +----T21
+                   |     |       |           +--|
+                   |     |       |           |  +--T49
+                   |     |       |     +-----|
+                   |     |       |     |     +----T39
+                   |     |       +-----|
+                   |     |             +----T27
+                   +-----|
+                         |        +---T1
+                         +--------|
+                                  |  +--T28
+                                  +--|
+                                     +--------T55
+
+Tree in newick format:
+
+(T2:0.1865911225,T61:0.0941755463,((T23:0.4014868329,T45:0.2371791411):0.2660396881,(((((T5:0.0329908305,T64:0.0481978743):0.0964923278,T56:0.1167813888):0.0112919599,(((T11:0.0316009013,T75:0.1734372844):0.0235444068,T62:0.0922300767):0.1430122443,T19:0.0000021312):0.0518221908):0.1063735556,(T10:0.1812343703,(T13:0.0184298042,T73:0.0411310923):0.1480748152):0.0574206787):0.2230800666,(((((T4:0.1202281408,(T35:0.0671665852,T78:0.0535551156):0.1451489678):0.0668680856,T33:0.0204063476):0.0807527908,T32:0.1025134994):0.0356351167,((((((T6:0.0764404099,T57:0.0325887529):0.0085330292,T47:0.0333750016):0.0746828141,T26:0.1646290735):0.1505316390,T17:0.0101049431):0.0378205056,((T14:0.1820775522,T54:0.0185463050):0.1858494993,(T38:0.0219073338,T51:0.3349972215):0.2121173191):0.0710408543):0.0517898772,((T7:0.1951914240,((T16:0.0915268400,(T72:0.1763823920,T77:0.2770096482):0.0463585363):0.0922381674,(T25:0.0028511561,T31:0.2126675659):0.3458571811):0.1990038026):0.1900573603,(((((T8:0.1023836308,(T53:0.2007819552,T68:0.0347938171):0.0226770680):0.1400649038,T29:0.0900951943):0.1432086423,(((((T22:0.0327294673,T67:0.0389535660):0.1026788917,(T43:0.1590716283,(T52:0.1891874980,(T70:0.0489852206,T76:0.1397316824):0.1491555661):0.4229360264):0.0000026202):0.1370928290,((T37:0.1682353555,(T69:0.0484427915,T74:0.0482553153):0.0000025055):0.1403199667,T60:0.0268154439):0.0399066164):0.0203764736,T34:0.0207086065):0.0838582714,(T30:0.3299159199,(T46:0.0150346897,T71:0.0107161027):0.0768358996):0.0007260244):0.3410245351):0.0045945784,(T20:0.0093887840,((T24:0.0607607096,T63:0.1859192302):0.1389457542,T48:0.0750163879):0.0944602907):0.0219147524):0.0529484331,(((T12:0.0007213712,T80:0.0032555519):0.1638078461,((T40:0.2674055770,T79:0.0262745333):0.0004273619,T41:0.0157888432):0.2380679663):0.1235062787,T36:0.0214926293):0.0860534035):0.1043485052):0.0970514937):0.0542749287):0.0082627089,((((T3:0.0970919623,(T18:0.0765853777,T58:0.2831315629):0.1657820952):0.0718565586,((((T15:0.0749427562,T65:0.0421674169):0.1206496457,T59:0.0565434402):0.1317037655,T50:0.4200838746):0.2598904593,T44:0.1176844687):0.0065346134):0.1548523999,((T9:0.1403745004,(T42:0.1083643013,T66:0.0058258602):0.2505022921):0.1543513322,(((T21:0.2289564561,T49:0.0119740524):0.1163586433,T39:0.2066233971):0.2506668041,T27:0.2139124583):0.2473310999):0.0889536600):0.2031539909,(T1:0.1613263696,(T28:0.0325866124,T55:0.3851079180):0.0624519219):0.3608226830):0.2749325579):0.2120230861):0.0793045211):0.4550111390);
+
+ALISIM COMMAND
+--------------
+To simulate an alignment of the same length as the original alignment, using the tree and model parameters estimated from this analysis, you can use the following command:
+
+--alisim simulated_MSA -t fit80_31.treefile -m "GTR{2,4,1,1.5,3}+FU{0.3,0.2,0.2,0.3}+R6{0.5,1.67084e-07,0.2,0.00835422,0.15,0.0835422,0.1,0.501253,0.04,2.50627,0.01,83.5422}" --length 3000
+
+To mimic the alignment used to produce this analysis, i.e. simulate an alignment of the same length as the original alignment, using the tree and model parameters estimated from this analysis *and* copying the same gap positions as the original alignment, you can use the following command:
+
+iqtree -s sim80_31.phy --alisim mimicked_MSA
+
+To simulate any number of alignments in either of the two commandlines above, use the --num-alignments options, for example mimic 100 alignments you would use the command line:
+
+iqtree -s sim80_31.phy --alisim mimicked_MSA --num-alignments 100
+
+For more information on using AliSim, please visit: www.iqtree.org/doc/AliSim
+
+TIME STAMP
+----------
+
+Date and time: Mon Jul  6 16:16:02 2026
+Total CPU time used: 0.099901 seconds (0h:0m:0s)
+Total wall-clock time used: 0.111552 seconds (0h:0m:0s)
+

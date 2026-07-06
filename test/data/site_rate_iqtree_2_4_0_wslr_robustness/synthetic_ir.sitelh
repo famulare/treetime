@@ -1,0 +1,10 @@
+# Site likelihood per rate/mixture category
+# Hand-built synthetic +I -wslr .sitelh (GTR+F+I+R2). Two variable-category
+# LnLW columns; the rate-0 invariant class is NOT a column -- its per-site
+# responsibility is the deficit p_i0 = 1 - sum_k q_k, which must be KEPT (not
+# renormalized away). LnL is 0 so exp(LnLW_k) reconstructs each variable q_k.
+#   site 1: q = [0.2, 0.5] -> p_i0 = 0.3
+#   site 2: -inf in a variable category -> q = [0, 0.6] -> p_i0 = 0.4
+Site	LnL	LnLW_1	LnLW_2
+1	0.000000	-1.609438	-0.693147
+2	0.000000	-inf	-0.510826

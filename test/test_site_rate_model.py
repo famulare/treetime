@@ -29,6 +29,7 @@ DATA = Path(__file__).parent / 'data' / 'site_rate_model'
 REAL_IQTREE_DATA = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0'
 REAL_IQTREE_GAMMA = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0_gamma'
 REAL_IQTREE_INVARIANT = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0_invariant'
+WSLR_ROBUSTNESS = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0_wslr_robustness'
 
 
 def test_site_specific_gtr_rejects_compressed_likelihoods():
@@ -782,6 +783,125 @@ def test_partitioned_invariant_gamma_defaults_bare_plus_i_and_g(tmp_path):
         )
 
 
+def test_wslr_synthetic_inf_and_undersum_rows_load_and_renormalize(recwarn):
+    """Non-+I -wslr rows with -inf and under-summing q are accepted and renormalized."""
+    model = load_iqtree_site_rate_posteriors(
+        WSLR_ROBUSTNESS / 'synthetic_r.sitelh',
+        report_file=WSLR_ROBUSTNESS / 'synthetic_r.iqtree',
+        sequence_length=4,
+    )
+    # -inf columns reconstruct to q_k = 0 with no warning from the exp/log path.
+    assert not [w for w in recwarn.list if issubclass(w.category, RuntimeWarning)]
+
+    # every row is rescaled to sum-1 among its categories (mirrors .siteprob)
+    np.testing.assert_allclose(model.posterior_weights.sum(axis=1), 1.0)
+    # site 1 is clean [0.5, 0.5]; site 2 is [-inf, log 1] -> [0, 1]
+    # (fixtures round LnLW to 6 decimals, so allow ~1e-5 slack)
+    np.testing.assert_allclose(model.posterior_weights[0], [0.5, 0.5], atol=1e-5)
+    np.testing.assert_allclose(model.posterior_weights[1], [0.0, 1.0], atol=1e-5)
+    # site 3 under-sums (0.4 + 0.46 = 0.86) -> renormalized 0.4/0.86, 0.46/0.86
+    np.testing.assert_allclose(model.posterior_weights[2], [0.4 / 0.86, 0.46 / 0.86], atol=1e-5)
+    # site 4 is -inf plus under-sum (0 + 0.9) -> [0, 1] after renormalization
+    np.testing.assert_allclose(model.posterior_weights[3], [0.0, 1.0], atol=1e-5)
+    # the -inf column left an exact zero responsibility
+    assert model.posterior_weights[1, 0] == 0.0
+    assert model.posterior_weights[3, 0] == 0.0
+    # sites 1 (6-decimal rounding), 3 and 4 (under-sum) deviate from sum-1; site 2
+    # reconstructs to exactly [0, 1] (LnLW_2 = 0 = log 1) so it is not counted.
+    assert model.metadata['renormalized_posterior_rows'] == 3
+
+
+def test_wslr_synthetic_invariant_inf_preserves_invariant_deficit(recwarn):
+    """A +I -wslr row with -inf in a variable category keeps p_i0 = 1 - sum_k q_k."""
+    model = load_iqtree_site_rate_posteriors(
+        WSLR_ROBUSTNESS / 'synthetic_ir.sitelh',
+        report_file=WSLR_ROBUSTNESS / 'synthetic_ir.iqtree',
+        sequence_length=2,
+    )
+    assert not [w for w in recwarn.list if issubclass(w.category, RuntimeWarning)]
+    # column 0 is the explicit rate-0 invariant category
+    assert model.metadata['category_counts'] == (3,)
+    np.testing.assert_allclose(model.category_rates[:, 0], 0.0)
+    np.testing.assert_allclose(model.posterior_weights.sum(axis=1), 1.0)
+    # site 1: q = [0.2, 0.5] -> p_i0 = 0.3 (the invariant deficit is KEPT)
+    np.testing.assert_allclose(model.posterior_weights[0], [0.3, 0.2, 0.5], atol=1e-5)
+    # site 2: -inf in a variable category -> q = [0, 0.6] -> p_i0 = 0.4
+    np.testing.assert_allclose(model.posterior_weights[1], [0.4, 0.0, 0.6], atol=1e-5)
+
+
+def test_wslr_alisim_real_inf_fixture_loads_and_cross_checks(recwarn):
+    """A genuine --alisim -wslr fixture with real -inf LnLW loads and matches .rate."""
+    model = load_iqtree_site_rate_posteriors(
+        WSLR_ROBUSTNESS / 'alisim_r.sitelh',
+        report_file=WSLR_ROBUSTNESS / 'alisim_r.iqtree',
+        rate_file=WSLR_ROBUSTNESS / 'alisim_r.rate',
+    )
+    # the .rate cross-check ran inside the loader without raising
+    assert not [w for w in recwarn.list if issubclass(w.category, RuntimeWarning)]
+    assert model.metadata['category_counts'] == (6,)
+    assert model.sequence_length == 40
+    np.testing.assert_allclose(model.posterior_weights.sum(axis=1), 1.0)
+    # at least one -inf column produced an exact-zero category responsibility
+    assert (model.posterior_weights[model.category_mask] == 0.0).any()
+
+
+def test_wslr_rejects_positive_inf_lnlw(tmp_path):
+    report = tmp_path / 'one_site.iqtree'
+    report.write_text(
+        (DATA / 'unpartitioned.iqtree')
+        .read_text(encoding='utf-8')
+        .replace('with 3 nucleotide sites', 'with 1 nucleotide sites'),
+        encoding='utf-8',
+    )
+    sitelh = tmp_path / 'posinf.sitelh'
+    sitelh.write_text('Site\tLnL\tLnLW_1\tLnLW_2\n1\t0.000000\tinf\t-0.693147\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='not a finite decimal number or -inf'):
+        load_iqtree_site_rate_posteriors(sitelh, report_file=report, sequence_length=1)
+
+
+def test_wslr_rejects_nan_lnlw(tmp_path):
+    report = tmp_path / 'one_site.iqtree'
+    report.write_text(
+        (DATA / 'unpartitioned.iqtree')
+        .read_text(encoding='utf-8')
+        .replace('with 3 nucleotide sites', 'with 1 nucleotide sites'),
+        encoding='utf-8',
+    )
+    sitelh = tmp_path / 'nan.sitelh'
+    sitelh.write_text('Site\tLnL\tLnLW_1\tLnLW_2\n1\t0.000000\tnan\t-0.693147\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='not a finite decimal number or -inf'):
+        load_iqtree_site_rate_posteriors(sitelh, report_file=report, sequence_length=1)
+
+
+def test_wslr_rejects_non_finite_lnl(tmp_path):
+    report = tmp_path / 'one_site.iqtree'
+    report.write_text(
+        (DATA / 'unpartitioned.iqtree')
+        .read_text(encoding='utf-8')
+        .replace('with 3 nucleotide sites', 'with 1 nucleotide sites'),
+        encoding='utf-8',
+    )
+    sitelh = tmp_path / 'inf_lnl.sitelh'
+    sitelh.write_text('Site\tLnL\tLnLW_1\tLnLW_2\n1\t-inf\t-0.693147\t-0.693147\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='site LnL is not a finite decimal number'):
+        load_iqtree_site_rate_posteriors(sitelh, report_file=report, sequence_length=1)
+
+
+def test_wslr_rejects_all_inf_row(tmp_path):
+    """A row whose variable categories are all -inf has no positive mass and fails closed."""
+    report = tmp_path / 'one_site.iqtree'
+    report.write_text(
+        (DATA / 'unpartitioned.iqtree')
+        .read_text(encoding='utf-8')
+        .replace('with 3 nucleotide sites', 'with 1 nucleotide sites'),
+        encoding='utf-8',
+    )
+    sitelh = tmp_path / 'all_inf.sitelh'
+    sitelh.write_text('Site\tLnL\tLnLW_1\tLnLW_2\n1\t0.000000\t-inf\t-inf\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='no positive finite category mass'):
+        load_iqtree_site_rate_posteriors(sitelh, report_file=report, sequence_length=1)
+
+
 def test_edge_equal_model_uses_reported_unit_speeds():
     model = load_iqtree_site_rates(
         DATA / 'partitioned.rate',
@@ -976,7 +1096,7 @@ def test_censored_rate_cross_check_fails_with_focused_message(tmp_path):
         )
 
 
-def test_sitelh_rows_allow_small_rounding_only(tmp_path):
+def test_sitelh_rows_renormalize_among_categories(tmp_path):
     report = tmp_path / 'one_site.iqtree'
     report.write_text(
         (DATA / 'unpartitioned.iqtree')
@@ -985,7 +1105,6 @@ def test_sitelh_rows_allow_small_rounding_only(tmp_path):
         encoding='utf-8',
     )
     # LnL=0, LnLW_k=log(p_k) makes exp(LnLW_k - LnL) reconstruct p_k exactly.
-    # The -wslr precision loosening admits a ~2e-6 sum-1 deviation for renormalization.
     log_half_rounded = float(np.log(0.500001))
     rounded = tmp_path / 'rounded.sitelh'
     rounded.write_text(
@@ -999,18 +1118,23 @@ def test_sitelh_rows_allow_small_rounding_only(tmp_path):
     )
     assert model.metadata['renormalized_posterior_rows'] == 1
 
-    # Reconstructed responsibilities summing to 1.4 exceed the 1e-3 tolerance.
+    # A non-+I row that under- or over-sums (here 1.4) is IQ-TREE's own .sitelh
+    # invariant violation; mirror .siteprob and renormalize among the categories
+    # rather than reject. The rescaled row sums to one.
     log_seven_tenths = float(np.log(0.7))
-    malformed = tmp_path / 'malformed.sitelh'
-    malformed.write_text(
+    imperfect = tmp_path / 'imperfect.sitelh'
+    imperfect.write_text(
         f'Site\tLnL\tLnLW_1\tLnLW_2\n1\t0.000000\t{log_seven_tenths:.6f}\t{log_seven_tenths:.6f}\n',
         encoding='utf-8',
     )
-    with pytest.raises(ValueError, match='expected one'):
-        load_iqtree_site_rate_posteriors(
-            malformed,
-            report_file=report,
-        )
+    model = load_iqtree_site_rate_posteriors(
+        imperfect,
+        report_file=report,
+        sequence_length=1,
+    )
+    np.testing.assert_allclose(model.posterior_weights.sum(axis=1), 1.0)
+    np.testing.assert_allclose(model.posterior_weights[0], [0.5, 0.5])
+    assert model.metadata['renormalized_posterior_rows'] == 1
 
 
 def test_invariant_report_with_nonzero_category_zero_is_rejected(tmp_path):
