@@ -201,6 +201,11 @@ class TreeTime(ClockTree):
         # register the specified covaration mode
         self.use_covariation = use_covariation or (vary_rate and (not type(vary_rate) == float))
 
+        if self.site_rate_model is not None and infer_gtr:
+            raise UnknownMethodError(
+                'site-rate models require a fixed scalar GTR; infer it before construction and run with infer_gtr=False'
+            )
+
         if (self.tree is None) or (self.aln is None and self.data.full_length is None):
             raise MissingDataError('TreeTime.run: ERROR, alignment or tree are missing')
         if self.aln is None:
@@ -440,6 +445,12 @@ class TreeTime(ClockTree):
             if the maximal branch length in the tree is longer than 0.05, this will
             default to 'input'. Otherwise set to 'joint'
         """
+        if self.site_rate_model is not None:
+            if branch_length_mode == 'auto':
+                branch_length_mode = 'marginal'
+            elif branch_length_mode != 'marginal':
+                raise UnknownMethodError('site-rate models require branch_length_mode="marginal"')
+
         if branch_length_mode in ['joint', 'marginal', 'input']:
             self.branch_length_mode = branch_length_mode
         elif self.aln:
@@ -727,7 +738,7 @@ class TreeTime(ClockTree):
 
         from .branch_len_interpolator import BranchLenInterpolator
 
-        zero_branch_slope = self.gtr.mu * self.data.full_length
+        zero_branch_slope = self._alignment_mutation_rate()
 
         def _c_gain(t, n1, n2, parent):
             """
@@ -830,6 +841,8 @@ class TreeTime(ClockTree):
                     one_mutation=self.one_mutation,
                     branch_length_mode=self.branch_length_mode,
                     n_grid_points=self.branch_grid_points,
+                    site_rate_model=self.site_rate_model,
+                    site_rate_base_gtr=self.site_rate_base_gtr,
                 )
 
                 clade.clades.remove(n1)
@@ -880,7 +893,7 @@ class TreeTime(ClockTree):
         exp_dis = self.rng.exponential
 
         L = self.data.full_length
-        mutation_rate = self.gtr.mu * L
+        mutation_rate = self._alignment_mutation_rate()
 
         tmax = parent.time_before_present
         branches_by_time = sorted(parent.clades, key=lambda x: x.time_before_present)
@@ -1001,6 +1014,8 @@ class TreeTime(ClockTree):
                         one_mutation=self.one_mutation,
                         branch_length_mode=self.branch_length_mode,
                         n_grid_points=self.branch_grid_points,
+                        site_rate_model=self.site_rate_model,
+                        site_rate_base_gtr=self.site_rate_base_gtr,
                     )
                     branches_alive = [b for b in branches_alive if b not in [n1, n2]] + [new_node]
 
@@ -1016,6 +1031,29 @@ class TreeTime(ClockTree):
         )
         # assign the remaining branches as new clades to the parent.
         parent.clades = remaining_branches
+
+    def _alignment_mutation_rate(self):
+        """Return the mutation-event rate summed over alignment sites."""
+        if self.site_rate_model is not None:
+            mean_rates = np.asarray(self.site_rate_model.mean_rates)
+            if mean_rates.shape != (self.data.full_length,):
+                raise ValueError('site-rate model must have one mean rate per alignment site')
+            if self.site_rate_base_gtr is None:
+                raise ValueError('site-rate models require a scalar base GTR')
+            base_rate = np.asarray(self.site_rate_base_gtr.average_rate())
+            if base_rate.ndim != 0 or not np.isfinite(base_rate) or base_rate <= 0:
+                raise ValueError('site-rate scalar base GTR must have a positive finite average rate')
+            # GTR_site_specific.mu is an internal matrix scale. With a gap
+            # state, its normalization includes gap exchangeabilities, whereas
+            # TreeTime's scalar mutation-event rate excludes gaps.
+            return float(base_rate * mean_rates.sum())
+
+        rate_scale = np.asarray(self.gtr.mu)
+        if rate_scale.ndim == 0:
+            return float(rate_scale * self.data.full_length)
+        if rate_scale.shape != (self.data.full_length,):
+            raise ValueError('site-specific GTR rates must have one value per alignment site')
+        return float(rate_scale.sum())
 
     def print_lh(self, joint=True):
         """

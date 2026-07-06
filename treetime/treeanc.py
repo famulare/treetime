@@ -1497,7 +1497,16 @@ class TreeAnc(object):
     #####################################################################
     ## GTR INFERENCE
     #####################################################################
-    def infer_gtr(self, marginal=False, site_specific=False, normalized_rate=True, fixed_pi=None, pc=5.0, **kwargs):
+    def infer_gtr(
+        self,
+        marginal=False,
+        site_specific=False,
+        normalized_rate=True,
+        fixed_pi=None,
+        pc=5.0,
+        site_rate_weights=None,
+        **kwargs,
+    ):
         """
         Calculates a GTR model given the multiple sequence alignment and the tree.
         It performs ancestral sequence inferrence (joint or marginal), followed by
@@ -1528,6 +1537,11 @@ class TreeAnc(object):
          pc: float
             Number of pseudo counts to use in gtr inference
 
+         site_rate_weights : np.array, optional
+            Known relative rate for each uncompressed alignment site. Counts
+            remain unweighted, while state-exposure times are multiplied by
+            these rates when inferring one shared scalar GTR.
+
         Returns
         -------
 
@@ -1536,6 +1550,8 @@ class TreeAnc(object):
         """
         if site_specific and self.data.compress:
             raise TypeError('TreeAnc.infer_gtr(): sequence compression and site specific GTR models are incompatible!')
+        if site_specific and site_rate_weights is not None:
+            raise ValueError('site_rate_weights apply only when inferring one shared scalar GTR')
 
         if not self.ok:
             raise MissingDataError('TreeAnc.infer_gtr: ERROR, sequences or tree are missing', 0)
@@ -1548,6 +1564,16 @@ class TreeAnc(object):
 
         n = self.gtr.n_states
         L = len(self.tree.root._cseq)
+        if site_rate_weights is None:
+            site_rate_weights = np.ones(L)
+        else:
+            site_rate_weights = np.asarray(site_rate_weights, dtype=float)
+            if site_rate_weights.shape != (L,):
+                raise ValueError('site_rate_weights must have one value per active alignment coordinate')
+            if not np.all(np.isfinite(site_rate_weights)) or np.any(site_rate_weights < 0):
+                raise ValueError('site_rate_weights must be finite and nonnegative')
+            if not np.any(site_rate_weights > 0):
+                raise ValueError('site_rate_weights must contain a positive rate')
         # matrix of mutations n_{ij}: i = derived state, j=ancestral state
         n_ija = np.zeros((n, n, L))
         T_ia = np.zeros((n, L))
@@ -1557,18 +1583,9 @@ class TreeAnc(object):
             for c in node:
                 if marginal:
                     mut_stack = np.transpose(self.get_branch_mutation_matrix(c, full_sequence=False), (1, 2, 0))
-                    T_ia += (
-                        0.5
-                        * self._branch_length_to_gtr(c)
-                        * mut_stack.sum(axis=0)
-                        * self.data.multiplicity(mask=c.mask)
-                    )
-                    T_ia += (
-                        0.5
-                        * self._branch_length_to_gtr(c)
-                        * mut_stack.sum(axis=1)
-                        * self.data.multiplicity(mask=c.mask)
-                    )
+                    exposure_multiplicity = self.data.multiplicity(mask=c.mask) * site_rate_weights
+                    T_ia += 0.5 * self._branch_length_to_gtr(c) * mut_stack.sum(axis=0) * exposure_multiplicity
+                    T_ia += 0.5 * self._branch_length_to_gtr(c) * mut_stack.sum(axis=1) * exposure_multiplicity
                     n_ija += mut_stack * self.data.multiplicity(mask=c.mask)
                 else:
                     for a, pos, d in c.mutations:
@@ -1579,14 +1596,19 @@ class TreeAnc(object):
                             continue
                         cpos = self.data.full_to_compressed_sequence_map[pos]
                         n_ija[i, j, cpos] += 1
-                        T_ia[j, cpos] += 0.5 * self._branch_length_to_gtr(c)
-                        T_ia[i, cpos] -= 0.5 * self._branch_length_to_gtr(c)
+                        midpoint_exposure = 0.5 * self._branch_length_to_gtr(c) * site_rate_weights[cpos]
+                        T_ia[j, cpos] += midpoint_exposure
+                        T_ia[i, cpos] -= midpoint_exposure
 
                     for i, nuc in enumerate(self.gtr.alphabet):
                         cseq = c.cseq
                         if cseq is not None:
                             ind = cseq == nuc
-                            T_ia[i, ind] += self._branch_length_to_gtr(c) * self.data.multiplicity(mask=c.mask)[ind]
+                            T_ia[i, ind] += (
+                                self._branch_length_to_gtr(c)
+                                * self.data.multiplicity(mask=c.mask)[ind]
+                                * site_rate_weights[ind]
+                            )
 
         self.logger('TreeAnc.infer_gtr: counting mutations...done', 3)
 
