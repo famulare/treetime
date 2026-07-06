@@ -16,6 +16,7 @@ from treetime.CLI_io import read_if_vcf
 from treetime.branch_len_interpolator import BranchLenInterpolator
 from treetime.gtr_site_specific import GTR_site_specific
 from treetime.iqtree_site_rates import (
+    _discrete_gamma_mean_rates,
     load_iqtree_site_rate_posteriors,
     load_iqtree_site_rates,
     parse_iqtree_partitions,
@@ -26,6 +27,7 @@ from treetime.wrappers import create_gtr, run_timetree
 
 DATA = Path(__file__).parent / 'data' / 'site_rate_model'
 REAL_IQTREE_DATA = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0'
+REAL_IQTREE_GAMMA = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0_gamma'
 
 
 def test_site_specific_gtr_rejects_compressed_likelihoods():
@@ -507,6 +509,160 @@ def test_real_iqtree_interleaved_outputs_map_each_source_row_to_global_axis():
     np.testing.assert_allclose(tier_a.mean_rates, scaled_rates / scaled_rates.mean())
 
 
+def _parse_report_gamma(report_path):
+    """Return (alpha, category-rate array) from an IQ-TREE +G report."""
+    alpha = None
+    rates = []
+    in_table = False
+    for line in report_path.read_text(encoding='utf-8').splitlines():
+        stripped = line.strip()
+        if stripped.startswith('Gamma shape alpha:'):
+            alpha = float(stripped.split(':', 1)[1])
+        if stripped.split() == ['Category', 'Relative_rate', 'Proportion']:
+            in_table = True
+            continue
+        if in_table:
+            fields = stripped.split()
+            if len(fields) == 3 and fields[0].isdigit():
+                rates.append(float(fields[1]))
+            elif rates:
+                break
+    return alpha, np.asarray(rates)
+
+
+def test_discrete_gamma_mean_rates_match_iqtree_report_table():
+    """Mean-method discretization reproduces IQ-TREE's own +G Category table."""
+    alpha, iqtree_rates = _parse_report_gamma(REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.iqtree')
+    assert alpha == pytest.approx(0.7875)
+    assert iqtree_rates.size == 4
+
+    computed = _discrete_gamma_mean_rates(alpha, 4)
+
+    # mean over equal-probability categories is one by construction
+    assert computed.mean() == pytest.approx(1.0, abs=1e-12)
+    # the report prints ~4 significant figures; agreement is limited only by that rounding
+    max_diff = float(np.max(np.abs(computed - iqtree_rates)))
+    assert max_diff <= 1e-3
+    np.testing.assert_allclose(computed, iqtree_rates, atol=1e-3)
+
+
+def test_unpartitioned_gamma_posteriors_use_report_category_table():
+    model = load_iqtree_site_rate_posteriors(
+        REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.sitelh',
+        report_file=REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.iqtree',
+        rate_file=REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.rate',
+        sequence_length=400,
+    )
+
+    assert model.evaluation_mode == 'posterior-elbo'
+    assert model.metadata['category_counts'] == (4,)
+    assert model.posterior_weights.shape == (400, 4)
+
+    alpha, iqtree_rates = _parse_report_gamma(REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.iqtree')
+    normalization = model.metadata['normalization_constant']
+    # category rates come straight from the report table, then are globally normalized
+    np.testing.assert_allclose(model.category_rates[0] * normalization, iqtree_rates, atol=1e-4)
+    np.testing.assert_allclose(model.category_prior_weights, np.full((400, 4), 0.25))
+    assert model.mean_rates.mean() == pytest.approx(1.0)
+
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    profiles = np.full((2, 400, len(base_gtr.alphabet)), 1 / len(base_gtr.alphabet))
+    value = model.prob_t_profiles_elbo(base_gtr, profiles, np.ones(400), 0.1, return_log=True)
+    assert np.isfinite(value)
+
+
+def test_partitioned_gamma_recomputes_category_rates_from_alpha():
+    model = load_iqtree_site_rate_posteriors(
+        REAL_IQTREE_GAMMA / 'partitioned' / 'generated.sitelh',
+        report_file=REAL_IQTREE_GAMMA / 'partitioned' / 'generated.iqtree',
+        partition_file=REAL_IQTREE_GAMMA / 'partitioned' / 'generated.best_model.nex',
+        rate_file=REAL_IQTREE_GAMMA / 'partitioned' / 'generated.rate',
+        sequence_length=400,
+    )
+
+    assert model.metadata['partition_model'] == 'edge-linked-proportional'
+    assert model.metadata['category_counts'] == (4, 4)
+    np.testing.assert_allclose(model.partition_speeds, [1.0183, 0.9726])
+
+    names, coordinates = parse_iqtree_partitions(REAL_IQTREE_GAMMA / 'partitions.nex', sequence_length=400)
+    assert names == ('first', 'second')
+    assert tuple(len(part) for part in coordinates) == (240, 160)
+
+    # per-row mapping invariant: global[coord(part, local)] carries the source partition/site
+    source_rows = []
+    for line in (REAL_IQTREE_GAMMA / 'partitioned' / 'generated.rate').read_text(encoding='utf-8').splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0].isdigit() and fields[1].isdigit():
+            source_rows.append((int(fields[0]), int(fields[1])))
+    assert len(source_rows) == 400
+    for partition_id, local_site in source_rows:
+        global_coordinate = int(coordinates[partition_id - 1][local_site - 1])
+        assert model.partition_index[global_coordinate] == partition_id - 1
+        assert model.partition_site[global_coordinate] == local_site
+
+    # partitioned +G writes only alpha; category rates must equal the alpha-recompute times speed
+    normalization = model.metadata['normalization_constant']
+    alphas = (0.792265, 0.794274)
+    for partition_id, alpha in enumerate(alphas, start=1):
+        expected = _discrete_gamma_mean_rates(alpha, 4) * model.partition_speeds[partition_id - 1] / normalization
+        rows = [
+            coordinates[partition_id - 1][local_site - 1] for part, local_site in source_rows if part == partition_id
+        ]
+        np.testing.assert_allclose(model.category_rates[rows[0]], expected, atol=1e-6)
+
+
+def test_partitioned_gamma_defaults_bare_plus_g_to_four_categories(tmp_path):
+    model_file = tmp_path / 'bare.best_model.nex'
+    model_file.write_text(
+        (REAL_IQTREE_GAMMA / 'partitioned' / 'generated.best_model.nex')
+        .read_text(encoding='utf-8')
+        .replace('+G4{0.792265}', '+G{0.792265}')
+        .replace('+G4{0.794274}', '+G{0.794274}'),
+        encoding='utf-8',
+    )
+    model = load_iqtree_site_rate_posteriors(
+        REAL_IQTREE_GAMMA / 'partitioned' / 'generated.sitelh',
+        report_file=REAL_IQTREE_GAMMA / 'partitioned' / 'generated.iqtree',
+        partition_file=model_file,
+        rate_file=REAL_IQTREE_GAMMA / 'partitioned' / 'generated.rate',
+        sequence_length=400,
+    )
+    assert model.metadata['category_counts'] == (4, 4)
+
+
+def test_partitioned_gamma_rejects_invariant_component(tmp_path):
+    model_file = tmp_path / 'invariant.best_model.nex'
+    model_file.write_text(
+        (REAL_IQTREE_GAMMA / 'partitioned' / 'generated.best_model.nex')
+        .read_text(encoding='utf-8')
+        .replace('+G4{0.792265}', '+I{0.1}+G4{0.792265}'),
+        encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match=r'\+I\+R'):
+        load_iqtree_site_rate_posteriors(
+            REAL_IQTREE_GAMMA / 'partitioned' / 'generated.sitelh',
+            report_file=REAL_IQTREE_GAMMA / 'partitioned' / 'generated.iqtree',
+            partition_file=model_file,
+            sequence_length=400,
+        )
+
+
+def test_unpartitioned_gamma_rejects_invariant_component(tmp_path):
+    report = tmp_path / 'invariant_gamma.iqtree'
+    report.write_text(
+        (REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.iqtree')
+        .read_text(encoding='utf-8')
+        .replace('GTR+F+G4', 'GTR+F+I+G4'),
+        encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match=r'\+I\+R'):
+        load_iqtree_site_rate_posteriors(
+            REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.sitelh',
+            report_file=report,
+            sequence_length=400,
+        )
+
+
 def test_edge_equal_model_uses_reported_unit_speeds():
     model = load_iqtree_site_rates(
         DATA / 'partitioned.rate',
@@ -547,12 +703,12 @@ def test_unpartitioned_report_length_must_match_posteriors(tmp_path):
 
 
 def test_unpartitioned_report_must_identify_freerate_model(tmp_path):
-    report = tmp_path / 'gamma.iqtree'
+    report = tmp_path / 'homogeneous.iqtree'
     report.write_text(
-        (DATA / 'unpartitioned.iqtree').read_text(encoding='utf-8').replace('GTR+F+R2', 'GTR+F+G2'),
+        (DATA / 'unpartitioned.iqtree').read_text(encoding='utf-8').replace('GTR+F+R2', 'GTR+F'),
         encoding='utf-8',
     )
-    with pytest.raises(ValueError, match=r'requires one IQ-TREE \+R'):
+    with pytest.raises(ValueError, match=r'requires one IQ-TREE \+R or \+G'):
         load_iqtree_site_rate_posteriors(
             DATA / 'unpartitioned.sitelh',
             report_file=report,

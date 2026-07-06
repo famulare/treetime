@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 import numpy as np
+from scipy.special import gammainc, gammaincinv
 
 from .site_rate_model import SiteRateModel
 
@@ -497,8 +498,17 @@ def _top_level_partition(entry):
     return pieces
 
 
+_DEFAULT_GAMMA_CATEGORIES = 4
+
+
 def _parse_freerate_expression(expression):
-    """Parse a top-level ``+Rk{weight,rate,...}`` model component."""
+    """Parse a single top-level ``+Rk{...}`` or ``+Gk{alpha}`` rate component.
+
+    ``+R`` reads explicit alternating ``weight,rate`` pairs. ``+G`` (discrete
+    Gamma) writes only the shape in ``best_model.nex`` (no per-category rate
+    table survives partition output), so the category rates are recomputed from
+    ``alpha`` with the mean method and equal ``1/K`` priors.
+    """
     if '+I{' in expression:
         raise ValueError(
             'IQ-TREE +I+R site posteriors do not expose an independently verified '
@@ -516,13 +526,15 @@ def _parse_freerate_expression(expression):
             depth -= 1
             if depth < 0:
                 raise ValueError('unbalanced braces in IQ-TREE model expression')
-        elif depth == 0 and expression.startswith('+R', index):
+        elif depth == 0 and (expression.startswith('+R', index) or expression.startswith('+G', index)):
+            kind = expression[index + 1]
             cursor = index + 2
             while cursor < len(expression) and expression[cursor].isdigit():
                 cursor += 1
-            if cursor == index + 2 or cursor >= len(expression) or expression[cursor] != '{':
-                raise ValueError(f'malformed FreeRate component in {expression!r}')
-            category_count = int(expression[index + 2 : cursor])
+            bare = cursor == index + 2
+            if cursor >= len(expression) or expression[cursor] != '{' or (bare and kind == 'R'):
+                raise ValueError(f'malformed +{kind} rate component in {expression!r}')
+            category_count = _DEFAULT_GAMMA_CATEGORIES if bare else int(expression[index + 2 : cursor])
             end = cursor + 1
             nested = 1
             while end < len(expression) and nested:
@@ -532,17 +544,28 @@ def _parse_freerate_expression(expression):
                     nested -= 1
                 end += 1
             if nested:
-                raise ValueError('unterminated FreeRate parameter group')
-            matches.append((category_count, expression[cursor + 1 : end - 1]))
+                raise ValueError(f'unterminated +{kind} parameter group')
+            matches.append((kind, category_count, expression[cursor + 1 : end - 1]))
             index = end
             continue
         index += 1
     if depth != 0:
         raise ValueError('unbalanced braces in IQ-TREE model expression')
     if len(matches) != 1:
-        raise ValueError(f'expected exactly one top-level IQ-TREE +R component, found {len(matches)}')
+        raise ValueError(f'expected exactly one top-level IQ-TREE +R or +G component, found {len(matches)}')
 
-    category_count, parameter_text = matches[0]
+    kind, category_count, parameter_text = matches[0]
+    if kind == 'G':
+        alpha_tokens = [token.strip() for token in _split_top_level(parameter_text, ',')]
+        if len(alpha_tokens) != 1:
+            raise ValueError(f'+G requires a single shape parameter, got {parameter_text!r}')
+        alpha = _parse_nonnegative_number(alpha_tokens[0], field='Gamma shape alpha', line_number=0)
+        category_rates = _discrete_gamma_mean_rates(alpha, category_count)
+        prior_weights, deviation = _normalize_probability_row(
+            np.full(category_count, 1.0 / category_count), description='discrete-Gamma category prior'
+        )
+        return category_rates, prior_weights, deviation
+
     values = [
         _parse_nonnegative_number(value.strip(), field='FreeRate parameter', line_number=0)
         for value in _split_top_level(parameter_text, ',')
@@ -566,6 +589,32 @@ def _normalize_probability_row(values, *, description, tolerance=1e-5):
     if total <= 0 or deviation > tolerance:
         raise ValueError(f'{description} sums to {total:.12g}, expected one')
     return values / total, deviation
+
+
+def _discrete_gamma_mean_rates(alpha, category_count):
+    """Discretize a mean-one Gamma(shape=rate=alpha) into ``K`` mean-method rates.
+
+    IQ-TREE reports "Relative rates are computed as MEAN of the portion of the
+    Gamma distribution falling in the category" over ``K`` equal-probability
+    categories (Yang 1994). The category boundaries satisfy
+    ``alpha * q_k = gammaincinv(alpha, k / K)`` and the mean rate of category
+    ``k`` is ``K * (F(q_k; alpha+1) - F(q_{k-1}; alpha+1))`` where
+    ``F(q; alpha+1) = gammainc(alpha+1, alpha*q)``. The returned rates have mean
+    exactly one by construction (the ``F(.; alpha+1)`` telescopes to one).
+    """
+    if not np.isfinite(alpha) or alpha <= 0:
+        raise ValueError(f'discrete-Gamma shape alpha must be finite and positive, got {alpha!r}')
+    if category_count < 1:
+        raise ValueError('discrete-Gamma category count must be positive')
+    edges = [gammaincinv(alpha, k / category_count) for k in range(1, category_count)]
+    cumulative = [0.0] + [gammainc(alpha + 1.0, edge) for edge in edges] + [1.0]
+    rates = np.asarray(
+        [category_count * (cumulative[k + 1] - cumulative[k]) for k in range(category_count)],
+        dtype=float,
+    )
+    if not np.all(np.isfinite(rates)) or np.any(rates < 0):
+        raise ValueError(f'discrete-Gamma rates are not finite and nonnegative for alpha {alpha!r}')
+    return rates
 
 
 def _parse_partition_freerate_models(path, partition_names):
@@ -630,21 +679,25 @@ def _parse_report_freerate_model(path):
             'IQ-TREE +I+R category output is not supported until its .sitelh '
             'category convention is independently verified'
         )
-    freerate_counts = []
+    # +R and +G share the report's Category/Relative_rate/Proportion table
+    # (equal 1/K proportions and MEAN category rates for +G); accept exactly one.
+    category_counts = []
     index = 0
     while index < len(model_name):
-        if model_name.startswith('+R', index):
+        if model_name.startswith('+R', index) or model_name.startswith('+G', index):
+            kind = model_name[index + 1]
             cursor = index + 2
             while cursor < len(model_name) and model_name[cursor].isdigit():
                 cursor += 1
-            if cursor == index + 2:
+            bare = cursor == index + 2
+            if bare and kind == 'R':
                 raise ValueError(f'{path}: malformed reported FreeRate model')
-            freerate_counts.append(int(model_name[index + 2 : cursor]))
+            category_counts.append(_DEFAULT_GAMMA_CATEGORIES if bare else int(model_name[index + 2 : cursor]))
             index = cursor
         else:
             index += 1
-    if len(freerate_counts) != 1:
-        raise ValueError(f'{path}: posterior-elbo input requires one IQ-TREE +R model')
+    if len(category_counts) != 1:
+        raise ValueError(f'{path}: posterior-elbo input requires one IQ-TREE +R or +G model')
 
     headers = [index for index, line in enumerate(lines) if line.split() == ['Category', 'Relative_rate', 'Proportion']]
     if len(headers) != 1:
@@ -674,8 +727,8 @@ def _parse_report_freerate_model(path):
     expected_ids = list(range(1, len(rows) + 1))
     if [row[0] for row in rows] != expected_ids:
         raise ValueError(f'{path}: FreeRate category IDs must be consecutive from one')
-    if len(rows) != freerate_counts[0]:
-        raise ValueError(f'{path}: reported +R category count does not match category table')
+    if len(rows) != category_counts[0]:
+        raise ValueError(f'{path}: reported +R/+G category count does not match category table')
     rates = np.asarray([row[1] for row in rows], dtype=float)
     priors, deviation = _normalize_probability_row([row[2] for row in rows], description='FreeRate category prior')
     return rates, priors, deviation
