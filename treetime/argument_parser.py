@@ -353,7 +353,7 @@ def make_parser():
 
     def toplevel(params):
         if (params.aln or params.tree) and params.dates:
-            timetree(params)
+            return timetree(params)
         else:
             print(
                 treetime_description
@@ -361,6 +361,7 @@ def make_parser():
                 + subcommand_description
                 + "'--dates' and '--aln' or '--tree' are REQUIRED inputs, type 'treetime -h' for a full list of arguments.\n"
             )
+            return 1
 
     t_parser.set_defaults(func=toplevel)
 

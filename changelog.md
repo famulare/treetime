@@ -1,3 +1,9 @@
+# Unreleased
+
+- reject pattern-compressed likelihoods for site-specific GTR models instead of silently using alignment-wide compression.
+- preserve explicitly supplied custom GTR models instead of re-inferring them when `--gtr infer` is also present.
+- propagate top-level time-tree CLI return codes so invalid invocations exit nonzero.
+
 # 0.12.1
 
 - fix `infer_ancestral_sequences` silently falling back to joint reconstruction instead of marginal in all iterations after the first when `branch_length_mode='marginal'` [issue #601](https://github.com/neherlab/treetime/issues/601) [PR #602](https://github.com/neherlab/treetime/pull/602)
