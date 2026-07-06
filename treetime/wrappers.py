@@ -1,4 +1,5 @@
 import os, shutil, sys
+from dataclasses import replace
 import numpy as np
 import pandas as pd
 from textwrap import fill
@@ -8,12 +9,141 @@ from . import TreeAnc, GTR, TreeTime
 from . import utils
 from . import TreeTimeError, MissingDataError, UnknownMethodError
 from .treetime import reduce_time_marginal_argument
+from .iqtree_site_rates import load_iqtree_site_rate_posteriors, load_iqtree_site_rates
+from .site_rate_model import build_site_rate_gtrs, write_site_rate_audit
 from .CLI_io import *
 
 
 def _infer_gtr_from_params(params):
     """Whether the CLI requested inference rather than a fixed/custom model."""
     return params.gtr == 'infer' and not getattr(params, 'custom_gtr', None)
+
+
+def _site_rate_requested(params):
+    return getattr(params, 'site_rate_mode', None) is not None or any(
+        getattr(params, name, None) for name in ('site_rates', 'site_rate_loglh', 'site_rate_report', 'site_rate_model')
+    )
+
+
+def _load_site_rate_model(params, sequence_length):
+    mode = params.site_rate_mode or 'mean'
+    rate_file = params.site_rates
+    posterior_file = params.site_rate_loglh
+    report_file = params.site_rate_report
+    partition_file = params.site_rate_model
+
+    if mode == 'posterior-elbo':
+        if posterior_file is None or report_file is None:
+            raise ValueError('--site-rate-mode posterior-elbo requires --site-rate-loglh and --site-rate-report')
+        return load_iqtree_site_rate_posteriors(
+            posterior_file,
+            report_file=report_file,
+            sequence_length=sequence_length,
+            partition_file=partition_file,
+            rate_file=rate_file,
+        )
+
+    if posterior_file is not None:
+        if report_file is None:
+            raise ValueError('--site-rate-loglh requires --site-rate-report')
+        posterior_model = load_iqtree_site_rate_posteriors(
+            posterior_file,
+            report_file=report_file,
+            sequence_length=sequence_length,
+            partition_file=partition_file,
+            rate_file=rate_file,
+        )
+        return replace(posterior_model, evaluation_mode='mean')
+
+    if rate_file is None:
+        raise ValueError('--site-rate-mode mean requires --site-rates or a complete posterior model')
+    return load_iqtree_site_rates(
+        rate_file,
+        sequence_length=sequence_length,
+        partition_file=partition_file,
+        report_file=report_file,
+    )
+
+
+def _prepare_site_rate_analysis(params, aln, ref, fixed_pi, base_gtr):
+    if params.tree is None:
+        raise ValueError('site-rate dating requires an explicit --tree shared with the IQ-TREE analysis')
+    if ref is not None:
+        raise ValueError('site-rate dating does not support VCF input; provide a full uncompressed alignment')
+    if params.aln is None:
+        raise ValueError('site-rate dating requires --aln so original alignment coordinates are available')
+    if params.sequence_length is not None:
+        raise ValueError('site-rate dating does not support --sequence-length in addition to --aln')
+    if params.branch_length_mode not in {'auto', 'marginal'}:
+        raise ValueError('site-rate dating requires --branch-length-mode marginal (or auto)')
+
+    alignment_tree = TreeAnc(
+        tree=params.tree,
+        aln=aln,
+        gtr=base_gtr,
+        verbose=params.verbose,
+        fill_overhangs=not params.keep_overhangs,
+        compress=True,
+        rng_seed=params.rng_seed,
+    )
+    if not alignment_tree.ok:
+        raise MissingDataError('site-rate setup could not load the tree and alignment')
+
+    site_rate_model = _load_site_rate_model(params, alignment_tree.data.full_length)
+    inferred_gtr = _infer_gtr_from_params(params)
+    if inferred_gtr:
+        initial_site_gtr, _ = build_site_rate_gtrs(site_rate_model, base_gtr)
+        rate_aware_tree = TreeAnc(
+            tree=params.tree,
+            aln=aln,
+            gtr=initial_site_gtr,
+            verbose=params.verbose,
+            fill_overhangs=not params.keep_overhangs,
+            compress=False,
+            rng_seed=params.rng_seed,
+        )
+        rate_aware_tree.infer_ancestral_sequences(
+            'probabilistic',
+            infer_gtr=False,
+            marginal=True,
+        )
+        base_gtr = rate_aware_tree.infer_gtr(
+            marginal=True,
+            site_specific=False,
+            normalized_rate=True,
+            fixed_pi=fixed_pi,
+            site_rate_weights=site_rate_model.mean_rates,
+        )
+
+    site_gtr, scalar_gtr = build_site_rate_gtrs(site_rate_model, base_gtr)
+    return site_rate_model, site_gtr, scalar_gtr, inferred_gtr
+
+
+def _report_site_rate_setup(tree, site_rate_model, *, confidence=False):
+    categories = (
+        int(site_rate_model.category_mask.sum(axis=1).max()) if site_rate_model.category_mask is not None else 1
+    )
+    branches = len(tree.tree.get_nonterminals()) + len(tree.tree.get_terminals()) - 1
+    work_units = branches * site_rate_model.sequence_length * categories * tree.branch_grid_points
+    print(
+        f'Using {site_rate_model.evaluation_mode} site-rate dating with '
+        f'{site_rate_model.sequence_length} sites and up to {categories} rate categories.'
+    )
+    print('Site-rate dating uses marginal branch likelihoods and uncompressed alignment coordinates.')
+    if site_rate_model.evaluation_mode == 'posterior-elbo':
+        print(f'Estimated branch-grid likelihood work: {work_units:.3g} site-category evaluations.')
+        if confidence:
+            print(
+                'WARNING: TreeTime confidence intervals condition on the fixed IQ-TREE category '
+                'responsibilities and are not calibrated FreeRate uncertainty intervals.',
+                file=sys.stderr,
+            )
+        if work_units >= 1e8:
+            print(
+                'WARNING: posterior-elbo site-rate dating may be slow for this input; '
+                'cost scales with branches x sites x categories x branch-grid points.',
+                file=sys.stderr,
+            )
 
 
 def assure_tree(params, tmp_dir='treetime_tmp'):
@@ -381,6 +511,9 @@ def timetree(params):
         print('No valid dates -- exiting.')
         return 1
 
+    if _site_rate_requested(params) and params.tree is None:
+        raise ValueError('site-rate dating requires an explicit --tree shared with the IQ-TREE analysis')
+
     if assure_tree(params, tmp_dir='timetree_tmp'):
         print('No tree -- exiting.')
         return 1
@@ -396,6 +529,39 @@ def timetree(params):
     if params.aln is None and params.sequence_length is None:
         print("one of arguments '--aln' and '--sequence-length' is required.", file=sys.stderr)
         return 1
+
+    if _site_rate_requested(params):
+        site_rate_model, site_gtr, scalar_gtr, inferred_gtr = _prepare_site_rate_analysis(
+            params,
+            aln,
+            ref,
+            fixed_pi,
+            gtr,
+        )
+        myTree = TreeTime(
+            dates=dates,
+            tree=params.tree,
+            aln=aln,
+            gtr=site_gtr,
+            verbose=params.verbose,
+            fill_overhangs=not params.keep_overhangs,
+            compress=False,
+            branch_length_mode=params.branch_length_mode,
+            site_rate_model=site_rate_model,
+            site_rate_base_gtr=scalar_gtr,
+            rng_seed=params.rng_seed,
+        )
+        table_path, metadata_path = write_site_rate_audit(site_rate_model, outdir)
+        print(f'Site-rate coordinate audit saved as {table_path}')
+        print(f'Site-rate metadata saved as {metadata_path}')
+        _report_site_rate_setup(myTree, site_rate_model, confidence=params.confidence)
+        if inferred_gtr:
+            model_path = os.path.join(outdir, 'sequence_evolution_model.txt')
+            with open(model_path, 'w', encoding='utf-8') as handle:
+                handle.write(str(scalar_gtr) + '\n')
+            print(f'\nInferred sequence evolution model (saved as {model_path}):')
+            print(scalar_gtr)
+        return run_timetree(myTree, params, outdir, infer_gtr=False)
 
     myTree = TreeTime(
         dates=dates,

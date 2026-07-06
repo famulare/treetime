@@ -1,5 +1,6 @@
 # Unreleased
 
+- add opt-in IQ-TREE site-rate-aware time-tree inference. Posterior-mean mode uses validated `.rate` values, while `posterior-elbo` mode evaluates a frozen-responsibility empirical-Bayes ELBO from FreeRate `.sitelh` output (`-wslr`), reconstructing per-site category responsibilities as `q_k = exp(LnLW_k - LnL)`. Both modes preserve the scalar substitution model, use uncompressed marginal branch likelihoods, validate partition coordinates and speeds, and write an auditable global site mapping.
 - fix greedy and stochastic polytomy resolution treating a site-specific GTR rate vector as a scalar mutation rate.
 - reject pattern-compressed likelihoods for site-specific GTR models instead of silently using alignment-wide compression.
 - clamp negative floating-point roundoff in site-specific GTR transition matrices, matching the scalar GTR convention.

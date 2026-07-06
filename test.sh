@@ -13,6 +13,7 @@ bash command_line_tests.sh
 pytest test_treetime.py
 pytest test_vcf.py
 pytest test_site_rate_model.py
+pytest test_site_rate_cli.py
 
 # Clean up, the 202* is to remove auto-generated output dirs
 rm -rf treetime_examples __pycache__ 202*
