@@ -1,6 +1,9 @@
 # Unreleased
 
 - add opt-in IQ-TREE site-rate-aware time-tree inference. Posterior-mean mode uses validated `.rate` values, while `posterior-elbo` mode evaluates a frozen-responsibility empirical-Bayes ELBO from FreeRate `.sitelh` output (`-wslr`), reconstructing per-site category responsibilities as `q_k = exp(LnLW_k - LnL)`. Both modes preserve the scalar substitution model, use uncompressed marginal branch likelihoods, validate partition coordinates and speeds, and write an auditable global site mapping.
+- standardize the `posterior-elbo` responsibility input on IQ-TREE's `-wslr` `.sitelh` file (a strict superset of the older `-wspr` `.siteprob` output), reconstructing responsibilities as `q_k = exp(LnLW_k - LnL)`.
+- support discrete-Gamma (`+G`) rate heterogeneity in `posterior-elbo` mode. Unpartitioned runs read the report's `Category`/`Relative_rate`/`Proportion` table; partitioned runs recompute the mean-method category rates from the `+Gk{alpha}` shape in `best_model.nex` (validated against IQ-TREE's own unpartitioned table).
+- support invariant sites (`+I`, both `+I+R` and `+I+G`, unpartitioned and partitioned) in `posterior-elbo` mode. The invariant class is not a `.sitelh` column; its per-site responsibility is reconstructed from the variable-category deficit `p_i0 = 1 - sum_k q_k` and kept as an explicit rate-0 category. Substitution-mixture, codon, edge-unlinked, and VCF inputs remain unsupported (fail-closed).
 - fix greedy and stochastic polytomy resolution treating a site-specific GTR rate vector as a scalar mutation rate.
 - reject pattern-compressed likelihoods for site-specific GTR models instead of silently using alignment-wide compression.
 - clamp negative floating-point roundoff in site-specific GTR transition matrices, matching the scalar GTR convention.

@@ -28,6 +28,7 @@ from treetime.wrappers import create_gtr, run_timetree
 DATA = Path(__file__).parent / 'data' / 'site_rate_model'
 REAL_IQTREE_DATA = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0'
 REAL_IQTREE_GAMMA = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0_gamma'
+REAL_IQTREE_INVARIANT = Path(__file__).parent / 'data' / 'site_rate_iqtree_2_4_0_invariant'
 
 
 def test_site_specific_gtr_rejects_compressed_likelihoods():
@@ -630,36 +631,154 @@ def test_partitioned_gamma_defaults_bare_plus_g_to_four_categories(tmp_path):
     assert model.metadata['category_counts'] == (4, 4)
 
 
-def test_partitioned_gamma_rejects_invariant_component(tmp_path):
-    model_file = tmp_path / 'invariant.best_model.nex'
+def _parse_report_invariant(report_path):
+    """Return (p_inv, variable-category-rate array) from an IQ-TREE +I report table."""
+    p_inv = None
+    rates = []
+    in_table = False
+    for line in report_path.read_text(encoding='utf-8').splitlines():
+        stripped = line.strip()
+        if stripped.startswith('Proportion of invariable sites:'):
+            p_inv = float(stripped.split(':', 1)[1])
+        if stripped.split() == ['Category', 'Relative_rate', 'Proportion']:
+            in_table = True
+            continue
+        if in_table:
+            fields = stripped.split()
+            if len(fields) == 3 and fields[0].isdigit():
+                if int(fields[0]) != 0:  # skip Category 0 (the invariant class)
+                    rates.append(float(fields[1]))
+            elif rates:
+                break
+    return p_inv, np.asarray(rates)
+
+
+def test_unpartitioned_invariant_gamma_reconstructs_invariant_responsibility():
+    """+I+G: p_i0 = 1 - sum_k q_k recovers the report p_inv and the .rate posterior mean."""
+    model = load_iqtree_site_rate_posteriors(
+        REAL_IQTREE_INVARIANT / 'ig_unpartitioned' / 'generated.sitelh',
+        report_file=REAL_IQTREE_INVARIANT / 'ig_unpartitioned' / 'generated.iqtree',
+        rate_file=REAL_IQTREE_INVARIANT / 'ig_unpartitioned' / 'generated.rate',
+        sequence_length=600,
+    )
+    p_inv, variable_rates = _parse_report_invariant(REAL_IQTREE_INVARIANT / 'ig_unpartitioned' / 'generated.iqtree')
+    assert p_inv == pytest.approx(0.356)
+    assert variable_rates.size == 4
+
+    # category 0 is the explicit rate-0 invariant class; categories 1..K are variable
+    assert model.metadata['category_counts'] == (5,)
+    assert model.posterior_weights.shape == (600, 5)
+    np.testing.assert_allclose(model.category_rates[:, 0], 0.0)
+    normalization = model.metadata['normalization_constant']
+    np.testing.assert_allclose(model.category_rates[0, 1:] * normalization, variable_rates, atol=1e-3)
+
+    # the invariant prior equals p_inv and the variable priors sum to (1 - p_inv)
+    np.testing.assert_allclose(model.category_prior_weights[:, 0], p_inv, atol=1e-3)
+    np.testing.assert_allclose(model.category_prior_weights.sum(axis=1), 1.0)
+
+    # hard gate: mean recovered invariant responsibility matches the report p_inv
+    mean_p_i0 = float(model.posterior_weights[:, 0].mean())
+    assert mean_p_i0 == pytest.approx(p_inv, abs=5e-3)
+    # full responsibility rows sum to one
+    np.testing.assert_allclose(model.posterior_weights.sum(axis=1), 1.0)
+    # the .rate cross-check (invariant contributes rate 0) passed inside the loader
+
+
+def test_unpartitioned_invariant_gamma_elbo_is_finite():
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    model = load_iqtree_site_rate_posteriors(
+        REAL_IQTREE_INVARIANT / 'ig_unpartitioned' / 'generated.sitelh',
+        report_file=REAL_IQTREE_INVARIANT / 'ig_unpartitioned' / 'generated.iqtree',
+        sequence_length=600,
+    )
+    profiles = np.full((2, 600, len(base_gtr.alphabet)), 1 / len(base_gtr.alphabet))
+    value = model.prob_t_profiles_elbo(base_gtr, profiles, np.ones(600), 0.1, return_log=True)
+    assert np.isfinite(value)
+
+
+def test_unpartitioned_invariant_freerate_reconstructs_invariant_responsibility():
+    """+I+R: the invariant deficit recovers p_inv; loaded model keeps a rate-0 category."""
+    model = load_iqtree_site_rate_posteriors(
+        REAL_IQTREE_INVARIANT / 'ir_unpartitioned' / 'generated.sitelh',
+        report_file=REAL_IQTREE_INVARIANT / 'ir_unpartitioned' / 'generated.iqtree',
+        sequence_length=600,
+    )
+    p_inv, variable_rates = _parse_report_invariant(REAL_IQTREE_INVARIANT / 'ir_unpartitioned' / 'generated.iqtree')
+    assert p_inv == pytest.approx(0.3145)
+    assert variable_rates.size == 4
+
+    assert model.metadata['category_counts'] == (5,)
+    np.testing.assert_allclose(model.category_rates[:, 0], 0.0)
+    np.testing.assert_allclose(model.posterior_weights.sum(axis=1), 1.0)
+    mean_p_i0 = float(model.posterior_weights[:, 0].mean())
+    assert mean_p_i0 == pytest.approx(p_inv, abs=5e-3)
+
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    profiles = np.full((2, 600, len(base_gtr.alphabet)), 1 / len(base_gtr.alphabet))
+    value = model.prob_t_profiles_elbo(base_gtr, profiles, np.ones(600), 0.1, return_log=True)
+    assert np.isfinite(value)
+
+
+def test_partitioned_invariant_gamma_maps_rate_zero_category_per_partition():
+    """Partitioned +I+G: each partition prepends its own rate-0 invariant category."""
+    model = load_iqtree_site_rate_posteriors(
+        REAL_IQTREE_INVARIANT / 'ig_partitioned' / 'generated.sitelh',
+        report_file=REAL_IQTREE_INVARIANT / 'ig_partitioned' / 'generated.iqtree',
+        partition_file=REAL_IQTREE_INVARIANT / 'ig_partitioned' / 'generated.best_model.nex',
+        sequence_length=600,
+    )
+    assert model.metadata['partition_model'] == 'edge-linked-proportional'
+    assert model.metadata['category_counts'] == (5, 5)
+    np.testing.assert_allclose(model.partition_speeds, [0.9236, 1.1145])
+
+    names, coordinates = parse_iqtree_partitions(REAL_IQTREE_INVARIANT / 'partitions.nex', sequence_length=600)
+    assert names == ('first', 'second')
+    assert tuple(len(part) for part in coordinates) == (360, 240)
+
+    # per-row mapping invariant: global[coord(part, local)] carries the source partition/site
+    source_rows = []
+    for line in (REAL_IQTREE_INVARIANT / 'ig_partitioned' / 'generated.rate').read_text(encoding='utf-8').splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0].isdigit() and fields[1].isdigit():
+            source_rows.append((int(fields[0]), int(fields[1])))
+    assert len(source_rows) == 600
+    for partition_id, local_site in source_rows:
+        global_coordinate = int(coordinates[partition_id - 1][local_site - 1])
+        assert model.partition_index[global_coordinate] == partition_id - 1
+        assert model.partition_site[global_coordinate] == local_site
+
+    # every site carries the rate-0 invariant category and rows sum to one
+    np.testing.assert_allclose(model.category_rates[:, 0], 0.0)
+    np.testing.assert_allclose(model.posterior_weights.sum(axis=1), 1.0)
+    # per-partition mean invariant responsibility matches each +I{p_inv}
+    for partition_id, p_inv in ((1, 0.386657), (2, 0.2526)):
+        rows = [
+            coordinates[partition_id - 1][local_site - 1] for part, local_site in source_rows if part == partition_id
+        ]
+        mean_p_i0 = float(model.posterior_weights[rows, 0].mean())
+        assert mean_p_i0 == pytest.approx(p_inv, abs=1e-2)
+
+    base_gtr = GTR.standard('JC69', alphabet='nuc')
+    profiles = np.full((2, 600, len(base_gtr.alphabet)), 1 / len(base_gtr.alphabet))
+    value = model.prob_t_profiles_elbo(base_gtr, profiles, np.ones(600), 0.1, return_log=True)
+    assert np.isfinite(value)
+
+
+def test_partitioned_invariant_gamma_defaults_bare_plus_i_and_g(tmp_path):
+    """A bare +I (no braces) has no reconstructable proportion and is rejected."""
+    model_file = tmp_path / 'bare_invariant.best_model.nex'
     model_file.write_text(
-        (REAL_IQTREE_GAMMA / 'partitioned' / 'generated.best_model.nex')
+        (REAL_IQTREE_INVARIANT / 'ig_partitioned' / 'generated.best_model.nex')
         .read_text(encoding='utf-8')
-        .replace('+G4{0.792265}', '+I{0.1}+G4{0.792265}'),
+        .replace('+I{0.386657}', '+I'),
         encoding='utf-8',
     )
-    with pytest.raises(ValueError, match=r'\+I\+R'):
+    with pytest.raises(ValueError, match='without an explicit proportion'):
         load_iqtree_site_rate_posteriors(
-            REAL_IQTREE_GAMMA / 'partitioned' / 'generated.sitelh',
-            report_file=REAL_IQTREE_GAMMA / 'partitioned' / 'generated.iqtree',
+            REAL_IQTREE_INVARIANT / 'ig_partitioned' / 'generated.sitelh',
+            report_file=REAL_IQTREE_INVARIANT / 'ig_partitioned' / 'generated.iqtree',
             partition_file=model_file,
-            sequence_length=400,
-        )
-
-
-def test_unpartitioned_gamma_rejects_invariant_component(tmp_path):
-    report = tmp_path / 'invariant_gamma.iqtree'
-    report.write_text(
-        (REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.iqtree')
-        .read_text(encoding='utf-8')
-        .replace('GTR+F+G4', 'GTR+F+I+G4'),
-        encoding='utf-8',
-    )
-    with pytest.raises(ValueError, match=r'\+I\+R'):
-        load_iqtree_site_rate_posteriors(
-            REAL_IQTREE_GAMMA / 'unpartitioned' / 'generated.sitelh',
-            report_file=report,
-            sequence_length=400,
+            sequence_length=600,
         )
 
 
@@ -894,17 +1013,19 @@ def test_sitelh_rows_allow_small_rounding_only(tmp_path):
         )
 
 
-def test_unverified_invariant_output_is_rejected(tmp_path):
+def test_invariant_report_with_nonzero_category_zero_is_rejected(tmp_path):
+    """A +I report whose Category 0 is not the rate-0 invariant class is malformed."""
     report = tmp_path / 'invariant.iqtree'
     report.write_text(
-        'Input data: 4 sequences with 3 nucleotide sites\n\n'
+        'Input data: 3 sequences with 3 nucleotide sites\n\n'
         'Model of substitution: GTR+F+I+R1\n\n'
+        'Proportion of invariable sites: 0.2\n\n'
         ' Category  Relative_rate  Proportion\n'
-        '  0         0.0            0.2\n'
+        '  0         0.5            0.2\n'
         '  1         1.25           0.8\n',
         encoding='utf-8',
     )
-    with pytest.raises(ValueError, match=r'\+I\+R'):
+    with pytest.raises(ValueError, match='Category 0 at relative rate 0'):
         load_iqtree_site_rate_posteriors(
             DATA / 'unpartitioned.sitelh',
             report_file=report,

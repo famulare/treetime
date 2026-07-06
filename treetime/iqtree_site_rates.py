@@ -501,19 +501,51 @@ def _top_level_partition(entry):
 _DEFAULT_GAMMA_CATEGORIES = 4
 
 
+def _parse_invariant_proportion(expression):
+    """Read an optional leading ``+I{p_inv}`` invariant-sites proportion.
+
+    Returns ``(p_inv, expression_without_I)``; ``p_inv`` is ``None`` when the
+    model carries no ``+I`` component. A bare ``+I`` (no braces) has no
+    reconstructable proportion and is rejected.
+    """
+    match = re.search(r'\+I(\{[^{}]*\})?', expression)
+    if match is None:
+        return None, expression
+    if match.group(1) is None:
+        raise ValueError(f'+I without an explicit proportion is not supported: {expression!r}')
+    proportion = _parse_nonnegative_number(
+        match.group(1)[1:-1].strip(), field='invariant-sites proportion', line_number=0
+    )
+    if proportion >= 1:
+        raise ValueError(f'invariant-sites proportion must be < 1, got {proportion}')
+    remainder = expression[: match.start()] + expression[match.end() :]
+    if '+I' in remainder:
+        raise ValueError(f'expected a single +I component in {expression!r}')
+    return proportion, remainder
+
+
+def _prepend_invariant_category(category_rates, prior_weights, proportion):
+    """Add the rate-0 invariant category and rescale variable priors by ``1 - p_inv``."""
+    category_rates = np.concatenate([[0.0], category_rates])
+    prior_weights = np.concatenate([[proportion], (1.0 - proportion) * prior_weights])
+    prior_weights, deviation = _normalize_probability_row(
+        prior_weights, description='invariant-augmented category prior'
+    )
+    return category_rates, prior_weights, deviation
+
+
 def _parse_freerate_expression(expression):
     """Parse a single top-level ``+Rk{...}`` or ``+Gk{alpha}`` rate component.
 
     ``+R`` reads explicit alternating ``weight,rate`` pairs. ``+G`` (discrete
     Gamma) writes only the shape in ``best_model.nex`` (no per-category rate
     table survives partition output), so the category rates are recomputed from
-    ``alpha`` with the mean method and equal ``1/K`` priors.
+    ``alpha`` with the mean method and equal ``1/K`` priors. An optional leading
+    ``+I{p_inv}`` prepends an explicit rate-0 invariant category and rescales the
+    variable priors by ``1 - p_inv`` (its per-site responsibility is recovered
+    from the ``.sitelh`` deficit ``1 - sum_k q_k`` in the loader, not here).
     """
-    if '+I{' in expression:
-        raise ValueError(
-            'IQ-TREE +I+R site posteriors do not expose an independently verified '
-            'invariant-category convention; use +R for posterior-elbo mode'
-        )
+    invariant_proportion, expression = _parse_invariant_proportion(expression)
 
     matches = []
     depth = 0
@@ -564,6 +596,8 @@ def _parse_freerate_expression(expression):
         prior_weights, deviation = _normalize_probability_row(
             np.full(category_count, 1.0 / category_count), description='discrete-Gamma category prior'
         )
+        if invariant_proportion is not None:
+            return _prepend_invariant_category(category_rates, prior_weights, invariant_proportion)
         return category_rates, prior_weights, deviation
 
     values = [
@@ -577,6 +611,8 @@ def _parse_freerate_expression(expression):
     prior_weights = np.asarray(values[0::2], dtype=float)
     category_rates = np.asarray(values[1::2], dtype=float)
     prior_weights, deviation = _normalize_probability_row(prior_weights, description='FreeRate category prior')
+    if invariant_proportion is not None:
+        return _prepend_invariant_category(category_rates, prior_weights, invariant_proportion)
     return category_rates, prior_weights, deviation
 
 
@@ -674,13 +710,10 @@ def _parse_report_freerate_model(path):
     if len(model_lines) != 1:
         raise ValueError(f'{path}: expected one reported substitution model')
     model_name = model_lines[0]
-    if '+I' in model_name:
-        raise ValueError(
-            'IQ-TREE +I+R category output is not supported until its .sitelh '
-            'category convention is independently verified'
-        )
+    invariant = bool(re.search(r'\+I(\{|\+|\Z)', model_name))
     # +R and +G share the report's Category/Relative_rate/Proportion table
     # (equal 1/K proportions and MEAN category rates for +G); accept exactly one.
+    # +I adds a leading Category 0 row (Relative_rate 0, Proportion p_inv).
     category_counts = []
     index = 0
     while index < len(model_name):
@@ -719,15 +752,22 @@ def _parse_report_freerate_model(path):
         rows.append((category_id, rate, weight))
     if not rows:
         raise ValueError(f'{path}: FreeRate category table has no rows')
-    if rows[0][0] == 0:
-        raise ValueError(
-            'IQ-TREE +I+R category output is not supported until its .sitelh '
-            'category convention is independently verified'
-        )
-    expected_ids = list(range(1, len(rows) + 1))
+    if invariant:
+        # +I reports Category 0 (rate 0, proportion p_inv) ahead of the K variable
+        # categories; keep it as an explicit rate-0 category. The rescaled variable
+        # proportions already sum to (1 - p_inv), so the full row sums to one.
+        if rows[0][0] != 0 or rows[0][1] != 0:
+            raise ValueError(f'{path}: +I report must start with Category 0 at relative rate 0')
+        expected_ids = list(range(len(rows)))
+        variable_count = len(rows) - 1
+    else:
+        if rows[0][0] == 0:
+            raise ValueError(f'{path}: unexpected Category 0 for a model without +I')
+        expected_ids = list(range(1, len(rows) + 1))
+        variable_count = len(rows)
     if [row[0] for row in rows] != expected_ids:
-        raise ValueError(f'{path}: FreeRate category IDs must be consecutive from one')
-    if len(rows) != category_counts[0]:
+        raise ValueError(f'{path}: FreeRate category IDs must be consecutive from {expected_ids[0]}')
+    if variable_count != category_counts[0]:
         raise ValueError(f'{path}: reported +R/+G category count does not match category table')
     rates = np.asarray([row[1] for row in rows], dtype=float)
     priors, deviation = _normalize_probability_row([row[2] for row in rows], description='FreeRate category prior')
@@ -897,7 +937,16 @@ def load_iqtree_site_rate_posteriors(
         partition_models = ((rates, priors),)
 
     category_counts = tuple(len(model[0]) for model in partition_models)
-    if max(category_counts) != maximum_columns:
+    # A +I model carries an explicit rate-0 invariant category (category 0) that is
+    # NOT a .sitelh column: the invariant is not a rate class IQ-TREE prints there.
+    # Its per-site responsibility is reconstructed as p_i0 = 1 - sum_k q_k. So the
+    # number of .sitelh columns for such a partition is one fewer than its category
+    # count (the variable rate classes only).
+    invariant_partition = tuple(rates[0] == 0.0 for rates, _ in partition_models)
+    variable_counts = tuple(
+        count - 1 if invariant else count for count, invariant in zip(category_counts, invariant_partition)
+    )
+    if max(variable_counts) != maximum_columns:
         raise ValueError(f'{sitelh_file}: posterior header category count does not match rate models')
     category_width = max(category_counts)
     posterior_weights = np.zeros((length, category_width), dtype=float)
@@ -915,18 +964,27 @@ def load_iqtree_site_rate_posteriors(
         coordinates = partition_coordinates[partition_id - 1]
         if local_site > len(coordinates):
             raise ValueError(f'line {line_number}: site {local_site} is out of range for partition {partition_id}')
-        expected_count = category_counts[partition_id - 1]
-        if len(probabilities) != expected_count:
+        expected_columns = variable_counts[partition_id - 1]
+        if len(probabilities) != expected_columns:
             raise ValueError(
                 f'line {line_number}: partition {partition_id} requires '
-                f'{expected_count} posterior columns, got {len(probabilities)}'
+                f'{expected_columns} posterior columns, got {len(probabilities)}'
             )
+        if invariant_partition[partition_id - 1]:
+            # The invariant responsibility is the deficit in the variable
+            # responsibilities: p_i0 = 1 - sum_k q_k (clamped for -wslr rounding).
+            # Build the full row [p_i0, q_1..q_K] then renormalize the FULL row so
+            # the rate-0 category absorbs the writer-precision rounding.
+            invariant_responsibility = max(0.0, 1.0 - float(np.sum(probabilities)))
+            full_probabilities = np.concatenate([[invariant_responsibility], probabilities])
+        else:
+            full_probabilities = probabilities
         # -wslr prints ~4-decimal log-likelihoods, so a reconstructed
         # q_k = exp(LnLW_k - LnL) row can deviate from sum-1 by ~1e-4; loosen the
         # per-row normalization tolerance accordingly (the strict 1e-5 tolerance is
         # retained for the full-precision category-prior rows from the model files).
         normalized_probabilities, deviation = _normalize_probability_row(
-            probabilities, description=f'line {line_number} posterior row', tolerance=1e-3
+            full_probabilities, description=f'line {line_number} posterior row', tolerance=1e-3
         )
         maximum_posterior_deviation = max(maximum_posterior_deviation, deviation)
         if deviation > 0:
@@ -935,10 +993,11 @@ def load_iqtree_site_rate_posteriors(
         if partition_index[global_coordinate] >= 0:
             raise ValueError(f'line {line_number}: duplicate mapped posterior row')
         raw_rates, priors = partition_models[partition_id - 1]
-        posterior_weights[global_coordinate, :expected_count] = normalized_probabilities
-        category_rates[global_coordinate, :expected_count] = raw_rates * partition_speeds[partition_id - 1]
-        category_priors[global_coordinate, :expected_count] = priors
-        category_mask[global_coordinate, :expected_count] = True
+        full_count = category_counts[partition_id - 1]
+        posterior_weights[global_coordinate, :full_count] = normalized_probabilities
+        category_rates[global_coordinate, :full_count] = raw_rates * partition_speeds[partition_id - 1]
+        category_priors[global_coordinate, :full_count] = priors
+        category_mask[global_coordinate, :full_count] = True
         partition_index[global_coordinate] = partition_id - 1
         partition_site[global_coordinate] = local_site
 
