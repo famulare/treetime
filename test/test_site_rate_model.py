@@ -11,6 +11,8 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from treetime import GTR, TreeAnc, TreeTime, UnknownMethodError
+from treetime import argument_parser as argument_parser_module
+from treetime.CLI_io import read_if_vcf
 from treetime.branch_len_interpolator import BranchLenInterpolator
 from treetime.gtr_site_specific import GTR_site_specific
 from treetime.iqtree_site_rates import (
@@ -96,6 +98,66 @@ def test_create_gtr_does_not_mutate_inference_configuration(tmp_path):
 
     assert isinstance(loaded, GTR)
     assert params.gtr == 'infer'
+
+
+def test_custom_gtr_disables_vcf_fixed_frequency_inference(monkeypatch):
+    monkeypatch.setattr(
+        'treetime.CLI_io.read_vcf',
+        lambda *_: {'sequences': {'sample': {0: 'C'}}, 'reference': 'ACGT'},
+    )
+    params = SimpleNamespace(
+        aa=False,
+        aln='input.vcf',
+        custom_gtr='model.txt',
+        gtr='infer',
+        vcf_reference='reference.fasta',
+    )
+
+    _, _, fixed_pi = read_if_vcf(params)
+
+    assert fixed_pi is None
+
+
+def test_toplevel_cli_propagates_success_and_reports_missing_inputs(monkeypatch, capsys):
+    parser = argument_parser_module.make_parser()
+    missing = parser.parse_args([])
+    assert missing.func(missing) == 1
+    assert 'REQUIRED inputs' in capsys.readouterr().out
+
+    monkeypatch.setattr(argument_parser_module, 'timetree', lambda params: 7)
+    valid = parser.parse_args(['--tree', 'tree.nwk', '--dates', 'dates.tsv'])
+    assert valid.func(valid) == 7
+
+
+@pytest.mark.parametrize('marginal', [False, True])
+def test_unweighted_gtr_inference_matches_explicit_unit_weights(marginal):
+    def analysis():
+        tree = Phylo.read(StringIO('(a:0.1,b:0.1,c:0.1);'), 'newick')
+        alignment = MultipleSeqAlignment(
+            [
+                SeqRecord(Seq('AACC'), id='a'),
+                SeqRecord(Seq('ACCC'), id='b'),
+                SeqRecord(Seq('AGCT'), id='c'),
+            ]
+        )
+        result = TreeAnc(
+            tree=tree,
+            aln=alignment,
+            gtr=GTR.standard('JC69', alphabet='nuc'),
+            compress=False,
+            verbose=0,
+            rng_seed=3,
+        )
+        result.infer_ancestral_sequences('probabilistic', marginal=marginal)
+        return result
+
+    legacy = analysis().infer_gtr(marginal=marginal)
+    weighted = analysis().infer_gtr(marginal=marginal, site_rate_weights=np.ones(4))
+
+    assert legacy.mu == weighted.mu
+    np.testing.assert_array_equal(legacy.Pi, weighted.Pi)
+    np.testing.assert_array_equal(legacy.W, weighted.W)
+    assert str(legacy) == str(weighted)
 
 
 def test_shared_gtr_inference_weights_exposure_by_known_site_rate(monkeypatch):
@@ -1130,6 +1192,17 @@ def test_polytomy_rate_uses_gap_excluding_scalar_normalization():
 
     assert not np.isclose(site_gtr.mu.sum(), model.sequence_length)
     assert tree_time._alignment_mutation_rate() == pytest.approx(model.sequence_length)
+
+
+def test_polytomy_rate_matches_legacy_scalar_expression_exactly():
+    tree_time = TreeTime.__new__(TreeTime)
+    tree_time.site_rate_model = None
+    tree_time._gtr = SimpleNamespace(mu=np.float64(0.125))
+    tree_time.data = SimpleNamespace(full_length=37)
+
+    expected = tree_time.gtr.mu * tree_time.data.full_length
+
+    assert tree_time._alignment_mutation_rate() == expected
 
 
 @pytest.mark.parametrize(
