@@ -1,0 +1,19 @@
+IQ-TREE 2.4.0
+
+SEQUENCE ALIGNMENT
+------------------
+
+Input data: 4 taxa with 2 partitions and 6 total sites (0% missing data)
+
+  ID	Type	Seq	Site	Unique	Infor	Invar	Const	Name
+   1	DNA	4	3	3	1	1	1	alpha_sites
+   2	DNA	4	3	3	1	1	1	beta-block
+
+SUBSTITUTION PROCESS
+--------------------
+
+Edge-linked-proportional partition model with separate substitution models and separate rates across sites
+
+  ID  Model           Speed  Parameters
+   1  GTR+F+R2        2.0    -
+   2  HKY+F+R2        0.5    -
